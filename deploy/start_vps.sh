@@ -41,19 +41,15 @@ port_in_use_by_other() {
 }
 
 echo "== Dependencies (private venv - system Python untouched) =="
-NEED=""
-command -v python3 >/dev/null || NEED="$NEED python3"
-command -v curl    >/dev/null || NEED="$NEED curl"
-python3 -c "import venv" 2>/dev/null || NEED="$NEED python3-venv"
-python3 -m pip --version >/dev/null 2>&1 || NEED="$NEED python3-pip"
-if [ -n "$NEED" ]; then
-    echo "   installing:$NEED"
-    apt-get update -y >/dev/null
-    apt-get install -y $NEED >/dev/null
-else
-    echo "   all present - installing nothing system-wide."
+apt-get update -y >/dev/null
+# python3-venv is required for `python3 -m venv` to work on Debian/Ubuntu even
+# when the `venv` module imports - it ships ensurepip separately.
+apt-get install -y python3 python3-venv python3-pip curl >/dev/null
+# (Re)create the venv if it's missing or a previous run left it half-made.
+if [ ! -x venv/bin/python3 ]; then
+    rm -rf venv
+    python3 -m venv venv
 fi
-[ -d venv ] || python3 -m venv venv
 ./venv/bin/pip install -q --upgrade pip
 ./venv/bin/pip install -q -r requirements.txt
 
