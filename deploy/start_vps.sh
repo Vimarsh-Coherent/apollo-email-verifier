@@ -71,7 +71,7 @@ if [ ! -f coordinator_token.txt ]; then
         > coordinator_token.txt
 fi
 TOKEN="$(cat coordinator_token.txt)"
-IP="$(curl -s https://ifconfig.me || echo YOUR_VPS_IP)"
+IP="$(curl -4 -s https://ifconfig.me || echo YOUR_VPS_IP)"
 
 echo "== Stopping only our own previous run (if any) =="
 stop_pid coordinator.pid
