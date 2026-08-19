@@ -170,7 +170,8 @@ class Verifier:
 
         try:
             need_catch_all, cached_ca = self._catch_all_needed(domain)
-            probe = SMTPProbe(primary_mx, lease, self.config.timeouts)
+            probe = SMTPProbe(primary_mx, lease, self.config.timeouts,
+                              bind_source=self.config.bind_source_ip)
             result = probe.converse([email], catch_all_probe=need_catch_all)
         finally:
             self.pool.release(lease)

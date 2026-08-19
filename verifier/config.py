@@ -75,6 +75,11 @@ class Config:
     # Worker threads. Keep at or below max_concurrent_total.
     workers: int = 10
 
+    # Bind each outbound probe to its source IP (real rotation). Set False when
+    # the provider blocks IPv4 port 25 but allows IPv6 (e.g. Hostinger): binding
+    # forces the blocked IPv4 path, so we let the OS route over IPv6 instead.
+    bind_source_ip: bool = True
+
     # SQLite file holding resumable per-candidate state.
     state_db: str = "verification_state.db"
 

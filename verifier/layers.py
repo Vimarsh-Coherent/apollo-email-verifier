@@ -175,10 +175,14 @@ class SMTPProbe:
     so we open a single connection and issue multiple RCPT TO commands.
     """
 
-    def __init__(self, mx_host, lease, timeouts):
+    def __init__(self, mx_host, lease, timeouts, bind_source=True):
         self.mx_host = mx_host
         self.lease = lease
         self.timeouts = timeouts
+        # When False, don't bind the outbound socket to the leased IPv4 - let the
+        # OS pick the route (needed where the provider blocks IPv4 port 25 but
+        # allows IPv6, e.g. Hostinger). Binding forces the blocked IPv4 path.
+        self.bind_source = bind_source
 
     def _random_local(self):
         # A local part no real mailbox would own. Deterministic-ish but unique
@@ -198,8 +202,10 @@ class SMTPProbe:
         """
         out = {"reachable": False, "catch_all": None, "results": {}, "error": None}
 
-        # Bind outbound to the leased source IP so rotation actually happens.
-        source = (self.lease["ip"], 0)
+        # Bind outbound to the leased source IP so rotation actually happens -
+        # unless binding is disabled (provider blocks IPv4 port 25; use default
+        # route, which reaches IPv6-capable MX servers).
+        source = (self.lease["ip"], 0) if self.bind_source else None
         # Short timeout for the initial connect (dead MX fails fast); the longer
         # command timeout applies once we're in the conversation.
         server = smtplib.SMTP(timeout=self.timeouts.connect, source_address=source)

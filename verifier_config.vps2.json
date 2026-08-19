@@ -8,6 +8,7 @@
   },
   "ehlo_hostname": "insightlumin.com",
   "workers": 3,
+  "bind_source_ip": false,
   "stop_on_first_hit": true,
   "skip_role_accounts": false,
   "state_db": "verification_state.db",
