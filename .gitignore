@@ -1,0 +1,29 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime state / logs / secrets (never commit these)
+*.db
+*.log
+coordinator_token.txt
+.streamlit/secrets.toml
+
+# Generated data - may contain real email addresses (PII). Never commit.
+*.csv
+seed.csv
+results.csv
+verified_*.csv
+email_verification_queue.csv
+emails_*.csv
+verification_results*.csv
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# SQLite side files
+*.db-shm
+*.db-wal
+*.db-journal

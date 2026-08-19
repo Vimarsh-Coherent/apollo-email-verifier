@@ -1,0 +1,31 @@
+# systemd unit for the email verifier - a one-shot run that survives SSH logout.
+#
+# Install:
+#   sudo cp deploy/verifier.service /etc/systemd/system/verifier.service
+#   # edit User= and the two paths below to match your box
+#   sudo systemctl daemon-reload
+#   sudo systemctl start verifier
+#   journalctl -u verifier -f            # watch live progress
+#
+# Because the run is resumable, `systemctl restart verifier` after a reboot
+# just continues where it left off.
+
+[Unit]
+Description=Email Verifier (7-layer SMTP)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=CHANGE_ME
+WorkingDirectory=/home/CHANGE_ME/scraper_-main
+ExecStart=/home/CHANGE_ME/scraper_-main/venv/bin/python verify_emails.py \
+    --input email_verification_queue.csv \
+    --config verifier_config.json \
+    --output results.csv
+# Give in-flight SMTP conversations time to close cleanly on stop.
+TimeoutStopSec=30
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

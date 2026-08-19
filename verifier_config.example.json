@@ -1,0 +1,53 @@
+{
+  "source_ips": [
+    "203.0.113.11",
+    "203.0.113.12",
+    "203.0.113.13",
+    "203.0.113.14",
+    "203.0.113.15"
+  ],
+  "sender_identities": [
+    "checker01@your-verify-domain.com",
+    "checker02@your-verify-domain.com",
+    "checker03@your-verify-domain.com",
+    "checker04@your-verify-domain.com",
+    "checker05@your-verify-domain.com",
+    "checker06@your-verify-domain.com",
+    "checker07@your-verify-domain.com",
+    "checker08@your-verify-domain.com",
+    "checker09@your-verify-domain.com",
+    "checker10@your-verify-domain.com"
+  ],
+  "ehlo_by_ip": {
+    "203.0.113.11": "mx1.your-verify-domain.com",
+    "203.0.113.12": "mx2.your-verify-domain.com",
+    "203.0.113.13": "mx3.your-verify-domain.com",
+    "203.0.113.14": "mx4.your-verify-domain.com",
+    "203.0.113.15": "mx5.your-verify-domain.com"
+  },
+  "ehlo_hostname": "mx1.your-verify-domain.com",
+  "workers": 10,
+  "stop_on_first_hit": true,
+  "skip_role_accounts": false,
+  "state_db": "verification_state.db",
+  "rate_limits": {
+    "max_concurrent_per_domain": 1,
+    "min_delay_per_domain": 6.0,
+    "min_delay_strict_domain": 25.0,
+    "max_probes_per_domain_hour": 40,
+    "max_probes_strict_domain_hour": 12,
+    "max_probes_per_ip_hour": 300,
+    "max_probes_per_ip_domain_hour": 15,
+    "max_concurrent_total": 10
+  },
+  "timeouts": {
+    "dns": 5.0,
+    "connect": 12.0,
+    "command": 15.0
+  },
+  "retry": {
+    "max_attempts": 3,
+    "backoff_seconds": [90, 420, 1200],
+    "rotate_ip_on_retry": true
+  }
+}

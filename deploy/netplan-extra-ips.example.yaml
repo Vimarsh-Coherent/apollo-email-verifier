@@ -1,0 +1,22 @@
+# Attach the 5 verifier IPs to the network interface (Ubuntu/Debian netplan).
+#
+# 1. Find your interface name:   ip -o link show   (often eth0, ens3, enp1s0)
+# 2. Replace eth0 below with it, and put YOUR real IPs in /32 form.
+# 3. Save as /etc/netplan/60-extra-ips.yaml
+# 4. sudo netplan apply
+# 5. Confirm:  ip a           (all 5 should appear on the interface)
+#    Confirm:  curl --interface 203.0.113.11 ifconfig.me   (prints that IP)
+#
+# NOTE: this ADDS secondary IPs. Do not remove your server's primary address /
+# gateway config - keep whatever the provider set in its own netplan file.
+
+network:
+  version: 2
+  ethernets:
+    eth0:
+      addresses:
+        - 203.0.113.11/32
+        - 203.0.113.12/32
+        - 203.0.113.13/32
+        - 203.0.113.14/32
+        - 203.0.113.15/32
