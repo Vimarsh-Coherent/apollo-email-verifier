@@ -213,12 +213,15 @@ class SMTPProbe:
                 out["error"] = f"EHLO/HELO rejected ({code})"
                 return out
 
-            # Some MX only reveal the real answer after STARTTLS.
+            # Some MX only reveal the real answer after STARTTLS. STARTTLS is
+            # optional for a RCPT probe, so ANY failure here (including the
+            # ValueError smtplib raises when the MX host yields an empty SNI
+            # hostname) must be swallowed - we simply continue in the clear.
             if server.has_extn("starttls"):
                 try:
                     server.starttls()
                     server.ehlo(self.lease["ehlo"])
-                except (smtplib.SMTPException, socket.error):
+                except Exception:
                     pass  # continue in the clear; not fatal for a probe
 
             code, msg = server.mail(self.lease["identity"])

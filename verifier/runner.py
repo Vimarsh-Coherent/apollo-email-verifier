@@ -89,7 +89,22 @@ class Verifier:
             for row in batch:
                 if self._stop.is_set():
                     return
-                self._process(row)
+                # A bug while processing ONE address must never kill the worker
+                # thread (and cascade into the whole worker exiting). Mark that
+                # address unknown and keep going.
+                try:
+                    self._process(row)
+                except Exception as exc:
+                    self.on_event("error", email=row.get("candidate_email"),
+                                  detail=str(exc))
+                    try:
+                        self.store.mark_error(
+                            row["candidate_email"],
+                            [f"worker exception: {type(exc).__name__}: {exc}"],
+                            (row.get("attempts") or 0) + 1, None,
+                        )
+                    except Exception:
+                        pass
 
     def _process(self, row):
         email = row["candidate_email"]
