@@ -175,10 +175,16 @@ class SMTPProbe:
     so we open a single connection and issue multiple RCPT TO commands.
     """
 
-    def __init__(self, mx_host, lease, timeouts, bind_source=True):
+    def __init__(self, mx_host, lease, timeouts, bind_source=True,
+                 use_starttls=False):
         self.mx_host = mx_host
         self.lease = lease
         self.timeouts = timeouts
+        # STARTTLS is optional for a RCPT probe (we never send mail) and, worse,
+        # a failed TLS negotiation leaves the socket in a broken state so the MX
+        # drops the whole conversation (SMTPServerDisconnected) before we reach
+        # RCPT. Default OFF: probe in the clear, which every MX answers.
+        self.use_starttls = use_starttls
         # When False, don't bind the outbound socket to the leased IPv4 - let the
         # OS pick the route (needed where the provider blocks IPv4 port 25 but
         # allows IPv6, e.g. Hostinger). Binding forces the blocked IPv4 path.
@@ -219,16 +225,24 @@ class SMTPProbe:
                 out["error"] = f"EHLO/HELO rejected ({code})"
                 return out
 
-            # Some MX only reveal the real answer after STARTTLS. STARTTLS is
-            # optional for a RCPT probe, so ANY failure here (including the
-            # ValueError smtplib raises when the MX host yields an empty SNI
-            # hostname) must be swallowed - we simply continue in the clear.
-            if server.has_extn("starttls"):
+            # STARTTLS is skipped by default: a failed TLS negotiation breaks the
+            # socket and the MX disconnects before we reach RCPT. We only attempt
+            # it when explicitly enabled, and reconnect fresh if it breaks.
+            if self.use_starttls and server.has_extn("starttls"):
                 try:
                     server.starttls()
                     server.ehlo(self.lease["ehlo"])
                 except Exception:
-                    pass  # continue in the clear; not fatal for a probe
+                    # TLS broke the socket - reopen a clean plaintext session.
+                    try:
+                        server.close()
+                    except Exception:
+                        pass
+                    server = smtplib.SMTP(timeout=self.timeouts.connect,
+                                          source_address=source)
+                    server.connect(self.mx_host, 25)
+                    server.timeout = self.timeouts.command
+                    server.ehlo(self.lease["ehlo"])
 
             code, msg = server.mail(self.lease["identity"])
             if code >= 400:

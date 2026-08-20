@@ -80,6 +80,11 @@ class Config:
     # forces the blocked IPv4 path, so we let the OS route over IPv6 instead.
     bind_source_ip: bool = True
 
+    # Attempt STARTTLS during the probe. Off by default: TLS is unnecessary for a
+    # RCPT check and a failed negotiation makes the MX drop the whole
+    # conversation before we reach RCPT.
+    use_starttls: bool = False
+
     # SQLite file holding resumable per-candidate state.
     state_db: str = "verification_state.db"
 
