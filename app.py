@@ -443,22 +443,29 @@ if df is not None:
             "Progress and verified results stream back here."
         )
 
-        cc1, cc2 = st.columns([2, 1])
-        with cc1:
-            coord_url = st.text_input(
-                "Coordinator URL",
-                value=st.session_state.get("coord_url", _secret("coordinator_url")),
-                placeholder="http://10.0.0.1:8900",
-                help="The address of your coordinator process, reachable over your "
-                     "private link (WireGuard/VPN).",
-            )
-        with cc2:
-            coord_token = st.text_input(
-                "Token",
-                value=st.session_state.get("coord_token", _secret("coordinator_token")),
-                type="password",
-                help="The shared bearer token the coordinator was started with.",
-            )
+        # The coordinator URL + token live in the app's Secrets. When they're
+        # set, the connection is hidden from the UI entirely; the fields only
+        # appear as a fallback when Secrets aren't configured (e.g. local dev).
+        secret_url = _secret("coordinator_url")
+        secret_token = _secret("coordinator_token")
+        if secret_url and secret_token:
+            coord_url = secret_url
+            coord_token = secret_token
+            st.caption("🔗 Connected to your VPS verification pool.")
+        else:
+            cc1, cc2 = st.columns([2, 1])
+            with cc1:
+                coord_url = st.text_input(
+                    "Coordinator URL",
+                    value=st.session_state.get("coord_url", ""),
+                    placeholder="http://10.0.0.1:8900",
+                )
+            with cc2:
+                coord_token = st.text_input(
+                    "Token",
+                    value=st.session_state.get("coord_token", ""),
+                    type="password",
+                )
 
         ready = bool(coord_url and coord_token)
         vb1, vb2 = st.columns(2)
