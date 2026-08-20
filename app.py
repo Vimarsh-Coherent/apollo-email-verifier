@@ -252,6 +252,55 @@ def best_per_person(res_df):
     return best.drop(columns=["_v", "_conf", "_rank"], errors="ignore")
 
 
+# Columns that carry an email *status*/verdict - stripped from the final sheet.
+_STATUS_COLS = {
+    "email_status", "email_true_status", "verdict", "confidence", "status",
+    "rcpt_code", "catch_all", "reasons", "attempts", "last_ip",
+}
+
+
+def build_apollo_output(contacts_df, res_df):
+    """Final deliverable: the original Apollo rows, but only for people whose
+    email verified **deliverable or risky**, with that verified email filled in
+    and every status column removed.
+    """
+    if contacts_df is None or res_df is None or res_df.empty:
+        return pd.DataFrame()
+
+    d = res_df.copy()
+    d = d[d.get("verdict", "").isin(["deliverable", "risky"])]
+    if d.empty:
+        return pd.DataFrame()
+
+    # Best address per person: deliverable before risky, then confidence, rank.
+    order = {"deliverable": 0, "risky": 1}
+    d["_v"] = d["verdict"].map(order).fillna(9)
+    d["_conf"] = pd.to_numeric(d.get("confidence"), errors="coerce").fillna(0)
+    d["_rank"] = pd.to_numeric(d.get("rank"), errors="coerce").fillna(999)
+    d = d.sort_values(["row_id", "_v", "_conf", "_rank"],
+                      ascending=[True, True, False, True])
+    best = d.groupby("row_id", as_index=False).first()
+
+    contacts = contacts_df.reset_index(drop=True)
+    out_rows = []
+    for _, hit in best.iterrows():
+        try:
+            idx = int(hit["row_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if idx < 0 or idx >= len(contacts):
+            continue
+        person = contacts.iloc[idx].to_dict()
+        person["email"] = hit["candidate_email"]   # the verified address
+        out_rows.append(person)
+
+    out = pd.DataFrame(out_rows)
+    drop = [c for c in out.columns if c in _STATUS_COLS]
+    if drop:
+        out = out.drop(columns=drop)
+    return out
+
+
 df = st.session_state.get("contacts_df")
 
 if df is not None:
@@ -573,28 +622,28 @@ if df is not None:
                 if rows:
                     res_df = pd.DataFrame(rows)
 
-                    st.markdown("#### 🎯 Best email per person")
-                    st.caption("One row per person — the strongest verdict, then "
-                               "highest confidence.")
-                    best_df = best_per_person(res_df)
-                    view_cols = [c for c in ["name", "org_name", "candidate_email",
-                                             "verdict", "confidence", "domain"]
-                                 if c in best_df.columns]
-                    st.dataframe(best_df[view_cols] if view_cols else best_df,
-                                 use_container_width=True, height=300)
-
-                    deliverable = best_df[best_df["verdict"] == "deliverable"] \
-                        if "verdict" in best_df.columns else best_df.iloc[0:0]
-                    st.download_button(
-                        f"📥 Download deliverable emails ({len(deliverable)})",
-                        data=to_csv_bytes(deliverable),
-                        file_name="verified_deliverable.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        disabled=len(deliverable) == 0,
+                    st.markdown("#### 📇 Final verified contacts (Apollo format)")
+                    st.caption("Only people whose email came back **deliverable or "
+                               "risky** — your original Apollo columns with the "
+                               "verified email filled in, and no status columns.")
+                    apollo_df = build_apollo_output(
+                        st.session_state.get("contacts_df"), res_df
                     )
+                    if apollo_df.empty:
+                        st.info("No deliverable or risky emails yet — keep clicking "
+                                "**Refresh Results** as verification progresses.")
+                    else:
+                        st.dataframe(apollo_df, use_container_width=True, height=360)
+                        st.download_button(
+                            f"📥 Download Verified Contacts ({len(apollo_df)}) — Apollo format",
+                            data=to_csv_bytes(apollo_df),
+                            file_name="verified_contacts_apollo.csv",
+                            mime="text/csv",
+                            type="primary",
+                            use_container_width=True,
+                        )
 
-                    with st.expander("🔬 Full verification results (every candidate)"):
+                    with st.expander("🔬 Full verification results (every candidate, all verdicts)"):
                         st.dataframe(res_df, use_container_width=True, height=400)
                         st.download_button(
                             f"📥 Download full results ({len(res_df)} rows)",
