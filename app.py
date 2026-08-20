@@ -592,11 +592,14 @@ if df is not None:
                     text=f"{done}/{total} addresses checked",
                 )
 
-                sm1, sm2, sm3, sm4 = st.columns(4)
-                sm1.metric("✅ Deliverable", by_verdict.get("deliverable", 0))
-                sm2.metric("⚠️ Risky", by_verdict.get("risky", 0))
-                sm3.metric("❌ Undeliverable", by_verdict.get("undeliverable", 0))
-                sm4.metric("❔ Unknown", by_verdict.get("unknown", 0))
+                # Risky addresses are treated as deliverable (usable), so they're
+                # folded into the Deliverable count rather than shown separately.
+                deliverable_count = (by_verdict.get("deliverable", 0)
+                                     + by_verdict.get("risky", 0))
+                sm1, sm2, sm3 = st.columns(3)
+                sm1.metric("✅ Deliverable", deliverable_count)
+                sm2.metric("❌ Undeliverable", by_verdict.get("undeliverable", 0))
+                sm3.metric("❔ Unknown", by_verdict.get("unknown", 0))
 
                 leases = status.get("leases", [])
                 if leases:
@@ -623,9 +626,9 @@ if df is not None:
                     res_df = pd.DataFrame(rows)
 
                     st.markdown("#### 📇 Final verified contacts (Apollo format)")
-                    st.caption("Only people whose email came back **deliverable or "
-                               "risky** — your original Apollo columns with the "
-                               "verified email filled in, and no status columns.")
+                    st.caption("Only people whose email **verified as deliverable** "
+                               "— your original Apollo columns with the verified "
+                               "email filled in, and no status columns.")
                     apollo_df = build_apollo_output(
                         st.session_state.get("contacts_df"), res_df
                     )
