@@ -1,0 +1,35 @@
+{
+  "source_ips": ["187.127.179.170"],
+  "sender_identities": [
+    "verify@insightscmi.com"
+  ],
+  "ehlo_by_ip": {
+    "187.127.179.170": "insightscmi.com"
+  },
+  "ehlo_hostname": "insightscmi.com",
+  "workers": 3,
+  "bind_source_ip": true,
+  "stop_on_first_hit": true,
+  "skip_role_accounts": false,
+  "state_db": "verification_state.db",
+  "rate_limits": {
+    "max_concurrent_per_domain": 1,
+    "min_delay_per_domain": 12.0,
+    "min_delay_strict_domain": 45.0,
+    "max_probes_per_domain_hour": 20,
+    "max_probes_strict_domain_hour": 6,
+    "max_probes_per_ip_hour": 150,
+    "max_probes_per_ip_domain_hour": 10,
+    "max_concurrent_total": 3
+  },
+  "timeouts": {
+    "dns": 5.0,
+    "connect": 12.0,
+    "command": 20.0
+  },
+  "retry": {
+    "max_attempts": 3,
+    "backoff_seconds": [120, 600, 1800],
+    "rotate_ip_on_retry": false
+  }
+}
