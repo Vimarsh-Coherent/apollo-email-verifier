@@ -14,18 +14,15 @@ st.set_page_config(
 )
 
 st.title("📊 Apollo Scraper")
-st.markdown("Paste JSON data from each Apollo page below. All data will be combined into a single CSV.")
+
 
 # Helper function to extract people/contacts data from JSON (universal)
 def extract_people_data(json_data):
     """Extract and flatten people/contacts data from JSON - handles both structures"""
     rows = []
-    
-    # Check for both 'people' and 'contacts' arrays
     data_list = json_data.get("people", []) or json_data.get("contacts", [])
-    
+
     for person in data_list:
-        # Extract basic person information
         row = {
             "id": person.get("id", ""),
             "name": person.get("name", ""),
@@ -44,13 +41,11 @@ def extract_people_data(json_data):
             "organization_id": person.get("organization_id", ""),
             "organization_name": person.get("organization_name", ""),
         }
-        
-        # Extract email information (handles both direct email and contact_emails array)
+
         primary_email = person.get("email", "")
         email_status = person.get("email_status", "")
         email_true_status = person.get("email_true_status", "")
-        
-        # If contact_emails array exists, get primary email from there
+
         contact_emails = person.get("contact_emails", [])
         if contact_emails and not primary_email:
             primary_email = contact_emails[0].get("email", "")
@@ -58,35 +53,32 @@ def extract_people_data(json_data):
                 email_status = contact_emails[0].get("email_status", "")
             if not email_true_status:
                 email_true_status = contact_emails[0].get("email_true_status", "")
-        
-        # Get all emails (for contacts with multiple emails)
+
         all_emails = [primary_email] if primary_email else []
         if contact_emails:
-            all_emails.extend([e.get("email", "") for e in contact_emails if e.get("email") and e.get("email") != primary_email])
-        all_emails = [e for e in all_emails if e]  # Remove empty strings
-        
+            all_emails.extend([e.get("email", "") for e in contact_emails
+                               if e.get("email") and e.get("email") != primary_email])
+        all_emails = [e for e in all_emails if e]
+
         row["email"] = primary_email
         row["email_status"] = email_status
         row["email_true_status"] = email_true_status
         row["all_emails"] = ", ".join(all_emails) if all_emails else ""
-        
-        # Extract phone numbers (handles both direct phone and phone_numbers array)
+
         phone_numbers = person.get("phone_numbers", [])
         if phone_numbers:
             primary_phone = phone_numbers[0].get("raw_number", "") or phone_numbers[0].get("sanitized_number", "")
-            all_phones = [p.get("raw_number", "") or p.get("sanitized_number", "") for p in phone_numbers if p.get("raw_number") or p.get("sanitized_number")]
-            all_phones = [p for p in all_phones if p]  # Remove empty strings
+            all_phones = [p.get("raw_number", "") or p.get("sanitized_number", "")
+                          for p in phone_numbers if p.get("raw_number") or p.get("sanitized_number")]
+            all_phones = [p for p in all_phones if p]
             row["phone"] = primary_phone
             row["all_phones"] = ", ".join(all_phones) if all_phones else ""
         else:
-            # Fallback to direct phone fields
             row["phone"] = person.get("phone", "") or person.get("sanitized_phone", "")
             row["all_phones"] = row["phone"]
-        
-        # Extract organization details (handles both nested organization object and direct fields)
+
         org = person.get("organization", {})
         if org:
-            # Nested organization object (people structure)
             row["org_name"] = org.get("name", "") or person.get("organization_name", "")
             row["org_website"] = org.get("website_url", "")
             row["org_linkedin"] = org.get("linkedin_url", "")
@@ -96,7 +88,6 @@ def extract_people_data(json_data):
             row["org_phone"] = org.get("phone", "") or org.get("sanitized_phone", "")
             row["org_founded_year"] = org.get("founded_year", "")
         else:
-            # Direct organization fields (contacts structure)
             row["org_name"] = person.get("organization_name", "")
             row["org_website"] = ""
             row["org_linkedin"] = ""
@@ -105,93 +96,17 @@ def extract_people_data(json_data):
             row["org_keywords"] = ""
             row["org_phone"] = ""
             row["org_founded_year"] = ""
-        
-        # Additional fields that might be useful
+
         row["twitter_url"] = person.get("twitter_url", "")
         row["facebook_url"] = person.get("facebook_url", "")
         row["person_id"] = person.get("person_id", "")
         row["account_id"] = person.get("account_id", "")
         row["created_at"] = person.get("created_at", "")
         row["updated_at"] = person.get("updated_at", "")
-        
+
         rows.append(row)
-    
+
     return rows
-
-# Create tabs for better organization
-num_pages = 25
-tabs = st.tabs([f"Page {i+1}" for i in range(num_pages)])
-
-# Store all JSON inputs
-json_inputs = {}
-
-# Create text areas in each tab
-for i, tab in enumerate(tabs):
-    with tab:
-        page_num = i + 1
-        json_input = st.text_area(
-            f"Paste JSON data from Page {page_num}",
-            height=400,
-            placeholder=f'Paste your JSON data from page {page_num} here...',
-            key=f"page_{page_num}"
-        )
-        json_inputs[page_num] = json_input
-        
-        # Show character count
-        if json_input:
-            char_count = len(json_input)
-            st.caption(f"📝 {char_count} characters")
-
-# Convert button
-if st.button("🔄 Convert All Pages to CSV", type="primary", use_container_width=True):
-    all_rows = []
-    pages_processed = 0
-    pages_with_errors = []
-    total_people = 0
-    
-    # Process each page
-    for page_num in range(1, num_pages + 1):
-        json_input = json_inputs.get(page_num, "")
-        
-        if json_input.strip():
-            try:
-                # Parse JSON
-                data = json.loads(json_input)
-                
-                # Extract people data
-                rows = extract_people_data(data)
-                
-                if rows:
-                    all_rows.extend(rows)
-                    pages_processed += 1
-                    total_people += len(rows)
-                    st.success(f"✅ Page {page_num}: {len(rows)} records extracted")
-                else:
-                    st.warning(f"⚠️ Page {page_num}: No people/contacts data found")
-                    
-            except json.JSONDecodeError as e:
-                error_msg = f"❌ Page {page_num}: Invalid JSON format - {str(e)}"
-                st.error(error_msg)
-                pages_with_errors.append(page_num)
-            except Exception as e:
-                error_msg = f"❌ Page {page_num}: Error - {str(e)}"
-                st.error(error_msg)
-                pages_with_errors.append(page_num)
-    
-    # Persist results so later widgets (the email generator) don't wipe them.
-    # Streamlit reruns the whole script on every interaction, which would make
-    # this `if st.button(...)` block False and discard everything.
-    if all_rows:
-        st.session_state["contacts_df"] = pd.DataFrame(all_rows)
-        st.session_state["pages_processed"] = pages_processed
-        st.session_state["pages_with_errors"] = pages_with_errors
-        # Any previously generated emails belong to the old dataset.
-        st.session_state.pop("emails_wide", None)
-        st.session_state.pop("emails_long", None)
-        st.session_state.pop("emails_stats", None)
-    else:
-        st.session_state.pop("contacts_df", None)
-        st.error("❌ No data found in any of the pages. Please paste JSON data in at least one page.")
 
 
 def to_csv_bytes(df):
@@ -234,24 +149,6 @@ def _secret(key):
         return ""
 
 
-# Priority for choosing one best address per person.
-_VERDICT_ORDER = {"deliverable": 0, "risky": 1, "unknown": 2, "undeliverable": 3}
-
-
-def best_per_person(res_df):
-    """Collapse to one row per person: best verdict, then highest confidence."""
-    if res_df.empty:
-        return res_df
-    d = res_df.copy()
-    d["_v"] = d.get("verdict", "").map(lambda v: _VERDICT_ORDER.get(v, 4))
-    d["_conf"] = pd.to_numeric(d.get("confidence"), errors="coerce").fillna(0)
-    d["_rank"] = pd.to_numeric(d.get("rank"), errors="coerce").fillna(999)
-    d = d.sort_values(["row_id", "_v", "_conf", "_rank"],
-                      ascending=[True, True, False, True])
-    best = d.groupby("row_id", as_index=False).first()
-    return best.drop(columns=["_v", "_conf", "_rank"], errors="ignore")
-
-
 # Columns that carry an email *status*/verdict - stripped from the final sheet.
 _STATUS_COLS = {
     "email_status", "email_true_status", "verdict", "confidence", "status",
@@ -261,9 +158,8 @@ _STATUS_COLS = {
 
 def build_apollo_output(contacts_df, res_df):
     """Final deliverable: the original Apollo rows, but only for people whose
-    email verified **deliverable or risky**, with that verified email filled in
-    and every status column removed.
-    """
+    email verified deliverable or risky, with that verified email filled in and
+    every status column removed."""
     if contacts_df is None or res_df is None or res_df.empty:
         return pd.DataFrame()
 
@@ -272,7 +168,6 @@ def build_apollo_output(contacts_df, res_df):
     if d.empty:
         return pd.DataFrame()
 
-    # Best address per person: deliverable before risky, then confidence, rank.
     order = {"deliverable": 0, "risky": 1}
     d["_v"] = d["verdict"].map(order).fillna(9)
     d["_conf"] = pd.to_numeric(d.get("confidence"), errors="coerce").fillna(0)
@@ -291,7 +186,7 @@ def build_apollo_output(contacts_df, res_df):
         if idx < 0 or idx >= len(contacts):
             continue
         person = contacts.iloc[idx].to_dict()
-        person["email"] = hit["candidate_email"]   # the verified address
+        person["email"] = hit["candidate_email"]
         out_rows.append(person)
 
     out = pd.DataFrame(out_rows)
@@ -301,411 +196,341 @@ def build_apollo_output(contacts_df, res_df):
     return out
 
 
-df = st.session_state.get("contacts_df")
+# ======================================================================
+# One self-contained task pipeline (pages -> convert -> generate -> verify).
+# Called once per tab with its own namespace and its own VPS coordinator, so
+# Task 1 and Task 2 run completely independently and in parallel.
+# ======================================================================
+def render_task(task, label, num_pages, url_key, token_key):
+    st.markdown(
+        f"Paste JSON data from each Apollo page below (up to **{num_pages} pages**). "
+        "All data is combined into a single CSV."
+    )
 
-if df is not None:
-    pages_processed = st.session_state.get("pages_processed", 0)
-    pages_with_errors = st.session_state.get("pages_with_errors", [])
+    page_tabs = st.tabs([f"Page {i + 1}" for i in range(num_pages)])
+    json_inputs = {}
+    for i, tab in enumerate(page_tabs):
+        with tab:
+            page_num = i + 1
+            ji = st.text_area(
+                f"Paste JSON data from Page {page_num}",
+                height=400,
+                placeholder=f"Paste your JSON data from page {page_num} here...",
+                key=f"{task}_page_{page_num}",
+            )
+            json_inputs[page_num] = ji
+            if ji:
+                st.caption(f"📝 {len(ji)} characters")
 
-    # Display summary
+    if st.button("🔄 Convert All Pages to CSV", type="primary",
+                 use_container_width=True, key=f"{task}_convert"):
+        all_rows, pages_processed, pages_with_errors = [], 0, []
+        for page_num in range(1, num_pages + 1):
+            ji = json_inputs.get(page_num, "")
+            if ji.strip():
+                try:
+                    rows = extract_people_data(json.loads(ji))
+                    if rows:
+                        all_rows.extend(rows)
+                        pages_processed += 1
+                        st.success(f"✅ Page {page_num}: {len(rows)} records extracted")
+                    else:
+                        st.warning(f"⚠️ Page {page_num}: No people/contacts data found")
+                except json.JSONDecodeError as e:
+                    st.error(f"❌ Page {page_num}: Invalid JSON - {e}")
+                    pages_with_errors.append(page_num)
+                except Exception as e:
+                    st.error(f"❌ Page {page_num}: Error - {e}")
+                    pages_with_errors.append(page_num)
+
+        if all_rows:
+            st.session_state[f"{task}_contacts_df"] = pd.DataFrame(all_rows)
+            st.session_state[f"{task}_pages_processed"] = pages_processed
+            st.session_state[f"{task}_pages_with_errors"] = pages_with_errors
+            for k in ("emails_wide", "emails_long", "emails_stats"):
+                st.session_state.pop(f"{task}_{k}", None)
+        else:
+            st.session_state.pop(f"{task}_contacts_df", None)
+            st.error("❌ No data found in any page. Paste JSON in at least one page.")
+
+    df = st.session_state.get(f"{task}_contacts_df")
+    if df is None:
+        return
+
+    pages_processed = st.session_state.get(f"{task}_pages_processed", 0)
+    pages_with_errors = st.session_state.get(f"{task}_pages_with_errors", [])
+
     st.divider()
-    st.success(f"🎉 Successfully processed {pages_processed} page(s) with {len(df)} total records!")
-    st.info(f"📊 Total records in CSV: {len(df)} (all records included, no duplicates removed)")
-
+    st.success(f"🎉 Processed {pages_processed} page(s) with {len(df)} total records!")
     if pages_with_errors:
-        st.warning(f"⚠️ {len(pages_with_errors)} page(s) had errors: {', '.join(map(str, pages_with_errors))}")
+        st.warning(f"⚠️ {len(pages_with_errors)} page(s) had errors: "
+                   f"{', '.join(map(str, pages_with_errors))}")
 
-    # Display preview
     st.subheader("📋 Data Preview")
     st.dataframe(df, use_container_width=True, height=400)
-
-    # Download button
     st.download_button(
-        label=f"📥 Download CSV ({len(df)} records)",
-        data=to_csv_bytes(df),
-        file_name="linkedin_contacts_combined.csv",
-        mime="text/csv",
-        use_container_width=True
+        f"📥 Download CSV ({len(df)} records)", data=to_csv_bytes(df),
+        file_name=f"{task}_contacts_combined.csv", mime="text/csv",
+        use_container_width=True, key=f"{task}_dl_csv",
     )
 
-    # Show statistics
     st.subheader("📊 Statistics")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Total Records", len(df))
-    with col2:
-        st.metric("Pages Processed", pages_processed)
-    with col3:
-        st.metric("With Email", len(df[df["email"] != ""]))
-    with col4:
-        if "email_status" in df.columns:
-            verified_count = len(df[df["email_status"].astype(str).str.lower() == "verified"])
-        else:
-            verified_count = 0
-        st.metric("Verified Emails", verified_count)
-    with col5:
-        st.metric("Unique Countries", df["country"].nunique())
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Records", len(df))
+    c2.metric("Pages Processed", pages_processed)
+    c3.metric("With Email", len(df[df["email"] != ""]))
+    vcount = (len(df[df["email_status"].astype(str).str.lower() == "verified"])
+              if "email_status" in df.columns else 0)
+    c4.metric("Verified Emails", vcount)
+    c5.metric("Unique Countries", df["country"].nunique())
+    c6, c7, c8 = st.columns(3)
+    c6.metric("Unique Companies", df["org_name"].nunique() if "org_name" in df.columns else 0)
+    c7.metric("C-Suite", len(df[df["seniority"] == "c_suite"]))
+    c8.metric("Vice Presidents", len(df[df["seniority"] == "vp"]))
 
-    # Additional stats
-    col6, col7, col8 = st.columns(3)
-    with col6:
-        st.metric("Unique Companies", df["org_name"].nunique() if "org_name" in df.columns else 0)
-    with col7:
-        c_suite_count = len(df[df["seniority"] == "c_suite"])
-        st.metric("C-Suite", c_suite_count)
-    with col8:
-        vp_count = len(df[df["seniority"] == "vp"])
-        st.metric("Vice Presidents", vp_count)
-
-    # ------------------------------------------------------------------
-    # Step 2 - Email permutation generator
-    # ------------------------------------------------------------------
+    # ---- Step 2: generate email permutations ----
     st.divider()
     st.subheader("✉️ Step 2: Generate Email Permutations")
-    st.markdown(
-        "Generate multiple candidate addresses per person using randomized "
-        "naming patterns. The output feeds the SMTP verification pipeline."
-    )
+    st.markdown("Generate candidate addresses per person from name + company domain. "
+                "The output feeds the SMTP verification pipeline.")
 
-    emails_per_person = st.slider(
-        "Emails to generate per person",
-        min_value=2,
-        max_value=7,
-        value=5,
-        help="Each person gets this many distinct addresses, drawn from the pattern catalogue."
-    )
+    epp = st.slider("Emails to generate per person", 2, 7, 5, key=f"{task}_epp")
+    o1, o2 = st.columns(2)
+    with o1:
+        repro = st.checkbox("Reproducible pattern picks", value=True, key=f"{task}_repro")
+    with o2:
+        salt = st.number_input("Shuffle seed", 0, 9999, 0, 1, key=f"{task}_salt")
 
-    opt_col1, opt_col2 = st.columns(2)
-    with opt_col1:
-        reproducible = st.checkbox(
-            "Reproducible pattern picks",
-            value=True,
-            help="Seed the randomizer per person so re-running gives the same addresses. "
-                 "Uncheck for a fresh random draw every run."
-        )
-    with opt_col2:
-        salt = st.number_input(
-            "Shuffle seed",
-            min_value=0,
-            max_value=9999,
-            value=0,
-            step=1,
-            help="Change this to reshuffle which patterns each person receives."
-        )
+    if st.button("🎲 Generate Emails", type="primary",
+                 use_container_width=True, key=f"{task}_gen"):
+        wide, long, stats = build_candidates(df, epp, reproducible=repro, salt=int(salt))
+        st.session_state[f"{task}_emails_wide"] = pd.DataFrame(wide)
+        st.session_state[f"{task}_emails_long"] = pd.DataFrame(long)
+        st.session_state[f"{task}_emails_stats"] = stats
 
-    if st.button("🎲 Generate Emails", type="primary", use_container_width=True):
-        wide, long, stats = build_candidates(
-            df, emails_per_person, reproducible=reproducible, salt=int(salt)
-        )
-        st.session_state["emails_wide"] = pd.DataFrame(wide)
-        st.session_state["emails_long"] = pd.DataFrame(long)
-        st.session_state["emails_stats"] = stats
-
-    wide_df = st.session_state.get("emails_wide")
-    long_df = st.session_state.get("emails_long")
-    stats = st.session_state.get("emails_stats")
+    wide_df = st.session_state.get(f"{task}_emails_wide")
+    long_df = st.session_state.get(f"{task}_emails_long")
+    stats = st.session_state.get(f"{task}_emails_stats")
 
     if wide_df is not None and stats is not None:
         if stats["candidates_total"] == 0:
-            st.error(
-                "❌ No candidates generated. No usable company domain was found — "
-                "these records need either a corporate email or an `org_website`."
-            )
+            st.error("❌ No candidates generated — no usable company domain found "
+                     "(records need a corporate email or an `org_website`).")
         else:
-            st.success(
-                f"✅ Generated {stats['candidates_total']} candidate emails "
-                f"for {stats['people_with_domain']} people across "
-                f"{stats['unique_domains']} domains."
-            )
-
+            st.success(f"✅ Generated {stats['candidates_total']} candidate emails for "
+                       f"{stats['people_with_domain']} people across "
+                       f"{stats['unique_domains']} domains.")
             m1, m2, m3, m4 = st.columns(4)
-            with m1:
-                st.metric("Candidate Emails", stats["candidates_total"])
-            with m2:
-                st.metric("People Covered", stats["people_with_domain"])
-            with m3:
-                st.metric("Unique Domains", stats["unique_domains"])
-            with m4:
-                skipped = (stats["people_skipped_no_domain"]
-                           + stats["people_skipped_free_email"]
-                           + stats["people_skipped_no_name"])
-                st.metric("Skipped", skipped)
+            m1.metric("Candidate Emails", stats["candidates_total"])
+            m2.metric("People Covered", stats["people_with_domain"])
+            m3.metric("Unique Domains", stats["unique_domains"])
+            skipped = (stats["people_skipped_no_domain"]
+                       + stats["people_skipped_free_email"]
+                       + stats["people_skipped_no_name"])
+            m4.metric("Skipped", skipped)
 
-            if skipped:
-                st.warning(
-                    f"⚠️ Skipped {skipped} record(s): "
-                    f"{stats['people_skipped_no_domain']} without a company domain, "
-                    f"{stats['people_skipped_free_email']} with only a free-mail address "
-                    f"(gmail/yahoo/etc. — permutations there are worthless and get your IP blocked), "
-                    f"{stats['people_skipped_no_name']} without a usable name."
-                )
-
-            tab_wide, tab_long, tab_patterns = st.tabs(
-                ["📋 Per Person", "🔍 Verification Queue", "🧩 Pattern Usage"]
-            )
-
-            with tab_wide:
+            tw, tl, tp = st.tabs(["📋 Per Person", "🔍 Verification Queue", "🧩 Pattern Usage"])
+            with tw:
                 st.dataframe(wide_df, use_container_width=True, height=400)
                 st.download_button(
-                    label=f"📥 Download Per-Person CSV ({len(wide_df)} rows)",
+                    f"📥 Download Per-Person CSV ({len(wide_df)} rows)",
                     data=to_csv_bytes(wide_df),
-                    file_name=f"emails_per_person_{emails_per_person}x.csv",
-                    mime="text/csv",
-                    use_container_width=True
+                    file_name=f"{task}_emails_per_person.csv", mime="text/csv",
+                    use_container_width=True, key=f"{task}_dl_wide",
                 )
-
-            with tab_long:
-                st.caption(
-                    "One row per candidate address — this is the file to hand to the "
-                    "SMTP verification workers."
-                )
+            with tl:
+                st.caption("One row per candidate address — the file the SMTP workers consume.")
                 st.dataframe(long_df, use_container_width=True, height=400)
                 st.download_button(
-                    label=f"📥 Download Verification Queue ({len(long_df)} rows)",
+                    f"📥 Download Verification Queue ({len(long_df)} rows)",
                     data=to_csv_bytes(long_df),
-                    file_name="email_verification_queue.csv",
-                    mime="text/csv",
-                    use_container_width=True
+                    file_name=f"{task}_verification_queue.csv", mime="text/csv",
+                    use_container_width=True, key=f"{task}_dl_long",
                 )
-
-            with tab_patterns:
-                counts = long_df["pattern"].value_counts().rename_axis("pattern")
-                counts = counts.reset_index(name="times_used")
+            with tp:
+                counts = (long_df["pattern"].value_counts()
+                          .rename_axis("pattern").reset_index(name="times_used"))
                 st.dataframe(counts, use_container_width=True, height=400)
-                st.caption(
-                    f"{len(EMAIL_PATTERNS)} patterns in the catalogue. Weighting means "
-                    "common conventions (first.last, flast) dominate while rarer ones "
-                    "still appear, so the mix differs person to person."
-                )
+                st.caption(f"{len(EMAIL_PATTERNS)} patterns in the catalogue.")
 
-    # ------------------------------------------------------------------
-    # Step 3 - Verify the candidate queue on the VPS pool (coordinator)
-    # ------------------------------------------------------------------
-    long_df = st.session_state.get("emails_long")
-    if long_df is not None and len(long_df) > 0:
-        st.divider()
-        st.subheader("🔎 Step 3: Verify Emails")
-        st.markdown(
-            "Send the candidate queue to your VPS verification pool. One "
-            "**coordinator** leases each domain to a single VPS, checks the "
-            "mailboxes over SMTP, and reclaims work automatically if a VPS drops. "
-            "Progress and verified results stream back here."
-        )
+    # ---- Step 3: verify on this task's VPS pool ----
+    long_df = st.session_state.get(f"{task}_emails_long")
+    if long_df is None or len(long_df) == 0:
+        return
 
-        # The coordinator URL + token live in the app's Secrets. When they're
-        # set, the connection is hidden from the UI entirely; the fields only
-        # appear as a fallback when Secrets aren't configured (e.g. local dev).
-        secret_url = _secret("coordinator_url")
-        secret_token = _secret("coordinator_token")
-        if secret_url and secret_token:
-            coord_url = secret_url
-            coord_token = secret_token
-            st.caption("🔗 Connected to your VPS verification pool.")
-        else:
-            cc1, cc2 = st.columns([2, 1])
-            with cc1:
-                coord_url = st.text_input(
-                    "Coordinator URL",
-                    value=st.session_state.get("coord_url", ""),
-                    placeholder="http://10.0.0.1:8900",
-                )
-            with cc2:
-                coord_token = st.text_input(
-                    "Token",
-                    value=st.session_state.get("coord_token", ""),
-                    type="password",
-                )
+    st.divider()
+    st.subheader("🔎 Step 3: Verify Emails")
+    st.markdown(f"Send the candidate queue to **{label}'s** VPS verification pool. One "
+                "coordinator leases each domain to a single VPS, checks the mailboxes "
+                "over SMTP, and reclaims work automatically if a VPS drops.")
 
-        ready = bool(coord_url and coord_token)
-        vb1, vb2 = st.columns(2)
-        with vb1:
-            start_clicked = st.button(
-                "🚀 Send to Verifier & Start", type="primary",
-                use_container_width=True, disabled=not ready,
+    secret_url = _secret(url_key)
+    secret_token = _secret(token_key)
+    if secret_url and secret_token:
+        coord_url, coord_token = secret_url, secret_token
+        st.caption(f"🔗 Connected to {label}'s VPS verification pool.")
+    else:
+        cc1, cc2 = st.columns([2, 1])
+        with cc1:
+            coord_url = st.text_input(
+                "Coordinator URL",
+                value=st.session_state.get(f"{task}_coord_url", ""),
+                placeholder="http://10.0.0.1:8900", key=f"{task}_url",
             )
-        with vb2:
-            refresh_clicked = st.button(
-                "🔄 Refresh Results", use_container_width=True, disabled=not ready,
+        with cc2:
+            coord_token = st.text_input(
+                "Token", value=st.session_state.get(f"{task}_coord_token", ""),
+                type="password", key=f"{task}_tok",
             )
 
-        if not ready:
-            st.info("Enter the coordinator URL and token to enable verification. "
-                    "On Streamlit Cloud you can preset these as `coordinator_url` "
-                    "and `coordinator_token` in the app's Secrets.")
+    ready = bool(coord_url and coord_token)
+    vb1, vb2 = st.columns(2)
+    with vb1:
+        start_clicked = st.button("🚀 Send to Verifier & Start", type="primary",
+                                  use_container_width=True, disabled=not ready,
+                                  key=f"{task}_start")
+    with vb2:
+        refresh_clicked = st.button("🔄 Refresh Results", use_container_width=True,
+                                    disabled=not ready, key=f"{task}_refresh")
 
-        if start_clicked:
-            st.session_state["coord_url"] = coord_url
-            st.session_state["coord_token"] = coord_token
-            records = long_df.to_dict(orient="records")
-            payload = [
-                {
-                    "candidate_email": r.get("candidate_email", ""),
-                    "row_id": int(r["row_id"]) if str(r.get("row_id", "")).strip() != "" else None,
-                    "id": str(r.get("id", "")),
-                    "name": str(r.get("name", "")),
-                    "domain": str(r.get("domain", "")),
-                    "pattern": str(r.get("pattern", "")),
-                    "rank": int(r["rank"]) if str(r.get("rank", "")).strip() != "" else None,
-                    "is_known_email": bool(r.get("is_known_email", False)),
-                }
-                for r in records if r.get("candidate_email")
-            ]
+    if not ready:
+        st.info(f"Set `{url_key}` and `{token_key}` in the app's **Secrets** to "
+                f"connect {label}'s VPS pool.")
+
+    if start_clicked:
+        st.session_state[f"{task}_coord_url"] = coord_url
+        st.session_state[f"{task}_coord_token"] = coord_token
+        records = long_df.to_dict(orient="records")
+        payload = [
+            {
+                "candidate_email": r.get("candidate_email", ""),
+                "row_id": int(r["row_id"]) if str(r.get("row_id", "")).strip() != "" else None,
+                "id": str(r.get("id", "")),
+                "name": str(r.get("name", "")),
+                "domain": str(r.get("domain", "")),
+                "pattern": str(r.get("pattern", "")),
+                "rank": int(r["rank"]) if str(r.get("rank", "")).strip() != "" else None,
+                "is_known_email": bool(r.get("is_known_email", False)),
+            }
+            for r in records if r.get("candidate_email")
+        ]
+        try:
+            chunk, total_added = 1000, 0
+            prog = st.progress(0.0, text="Sending queue to coordinator...")
+            for i in range(0, len(payload), chunk):
+                part = payload[i:i + chunk]
+                resp = coord_request(coord_url, coord_token, "POST", "/seed",
+                                     {"candidates": part, "clear": i == 0})
+                total_added += resp.get("added", 0)
+                prog.progress(min(1.0, (i + len(part)) / len(payload)),
+                              text=f"Sent {i + len(part)}/{len(payload)} addresses")
+            prog.empty()
+            st.session_state[f"{task}_verify_started"] = True
+            st.success(f"✅ Queued {total_added} addresses. {label}'s VPS workers will "
+                       "pick them up. Use **Refresh Results** to track progress.")
+        except RuntimeError as exc:
+            st.error(f"❌ {exc}")
+
+    if (refresh_clicked or st.session_state.get(f"{task}_verify_started")) and ready:
+        try:
+            status = coord_request(coord_url, coord_token, "GET", "/status")
+        except RuntimeError as exc:
+            st.error(f"❌ {exc}")
+            status = None
+
+        if status is not None:
+            by_status = status.get("counts", {}).get("status", {})
+            by_verdict = status.get("counts", {}).get("verdict", {})
+            total = sum(by_status.values())
+            done = by_status.get("done", 0) + by_status.get("error", 0)
+
+            st.progress((done / total) if total else 0.0,
+                        text=f"{done}/{total} addresses checked")
+
+            # Risky is treated as deliverable (usable) and folded into that count.
+            deliverable_count = by_verdict.get("deliverable", 0) + by_verdict.get("risky", 0)
+            sm1, sm2, sm3 = st.columns(3)
+            sm1.metric("✅ Deliverable", deliverable_count)
+            sm2.metric("❌ Undeliverable", by_verdict.get("undeliverable", 0))
+            sm3.metric("❔ Unknown", by_verdict.get("unknown", 0))
+
+            leases = status.get("leases", [])
+            if leases:
+                nodes = sorted({l["node"] for l in leases})
+                st.caption(f"🖥️ Working now: **{', '.join(nodes)}** — "
+                           f"{len(leases)} domain(s) leased · "
+                           f"pending {by_status.get('pending', 0)} · "
+                           f"in-flight {by_status.get('claimed', 0)} · "
+                           f"retry {by_status.get('retry', 0)}")
+
+            if total and done >= total:
+                st.success("🎉 Verification complete.")
+            elif st.session_state.get(f"{task}_verify_started"):
+                st.info("⏳ In progress — click **Refresh Results** to update.")
+
             try:
-                chunk = 1000
-                total_added = 0
-                prog = st.progress(0.0, text="Sending queue to coordinator...")
-                for i in range(0, len(payload), chunk):
-                    part = payload[i:i + chunk]
-                    resp = coord_request(
-                        coord_url, coord_token, "POST", "/seed",
-                        {"candidates": part, "clear": i == 0},
-                    )
-                    total_added += resp.get("added", 0)
-                    prog.progress(
-                        min(1.0, (i + len(part)) / len(payload)),
-                        text=f"Sent {i + len(part)}/{len(payload)} addresses",
-                    )
-                prog.empty()
-                st.session_state["verify_started"] = True
-                st.success(
-                    f"✅ Queued {total_added} addresses on the coordinator. Your VPS "
-                    "workers will pick them up. Use **Refresh Results** to track progress."
+                rows = coord_request(coord_url, coord_token, "GET", "/export").get("rows", [])
+            except RuntimeError:
+                rows = []
+
+            if rows:
+                res_df = pd.DataFrame(rows)
+                st.markdown("#### 📇 Final verified contacts (Apollo format)")
+                st.caption("Only people whose email **verified as deliverable** — your "
+                           "original Apollo columns with the verified email filled in, "
+                           "and no status columns.")
+                apollo_df = build_apollo_output(
+                    st.session_state.get(f"{task}_contacts_df"), res_df
                 )
-            except RuntimeError as exc:
-                st.error(f"❌ {exc}")
-
-        if (refresh_clicked or st.session_state.get("verify_started")) and ready:
-            try:
-                status = coord_request(coord_url, coord_token, "GET", "/status")
-            except RuntimeError as exc:
-                st.error(f"❌ {exc}")
-                status = None
-
-            if status is not None:
-                by_status = status.get("counts", {}).get("status", {})
-                by_verdict = status.get("counts", {}).get("verdict", {})
-                total = sum(by_status.values())
-                done = by_status.get("done", 0) + by_status.get("error", 0)
-
-                st.progress(
-                    (done / total) if total else 0.0,
-                    text=f"{done}/{total} addresses checked",
-                )
-
-                # Risky addresses are treated as deliverable (usable), so they're
-                # folded into the Deliverable count rather than shown separately.
-                deliverable_count = (by_verdict.get("deliverable", 0)
-                                     + by_verdict.get("risky", 0))
-                sm1, sm2, sm3 = st.columns(3)
-                sm1.metric("✅ Deliverable", deliverable_count)
-                sm2.metric("❌ Undeliverable", by_verdict.get("undeliverable", 0))
-                sm3.metric("❔ Unknown", by_verdict.get("unknown", 0))
-
-                leases = status.get("leases", [])
-                if leases:
-                    nodes = sorted({l["node"] for l in leases})
-                    st.caption(
-                        f"🖥️ Working now: **{', '.join(nodes)}** — "
-                        f"{len(leases)} domain(s) leased · "
-                        f"pending {by_status.get('pending', 0)} · "
-                        f"in-flight {by_status.get('claimed', 0)} · "
-                        f"retry {by_status.get('retry', 0)}"
+                if apollo_df.empty:
+                    st.info("No deliverable emails yet — keep clicking **Refresh "
+                            "Results** as verification progresses.")
+                else:
+                    st.dataframe(apollo_df, use_container_width=True, height=360)
+                    st.download_button(
+                        f"📥 Download Verified Contacts ({len(apollo_df)}) — Apollo format",
+                        data=to_csv_bytes(apollo_df),
+                        file_name=f"{task}_verified_contacts_apollo.csv",
+                        mime="text/csv", type="primary",
+                        use_container_width=True, key=f"{task}_dl_apollo",
                     )
 
-                if total and done >= total:
-                    st.success("🎉 Verification complete.")
-                elif st.session_state.get("verify_started"):
-                    st.info("⏳ In progress — click **Refresh Results** to update.")
-
-                try:
-                    rows = coord_request(coord_url, coord_token, "GET", "/export").get("rows", [])
-                except RuntimeError:
-                    rows = []
-
-                if rows:
-                    res_df = pd.DataFrame(rows)
-
-                    st.markdown("#### 📇 Final verified contacts (Apollo format)")
-                    st.caption("Only people whose email **verified as deliverable** "
-                               "— your original Apollo columns with the verified "
-                               "email filled in, and no status columns.")
-                    apollo_df = build_apollo_output(
-                        st.session_state.get("contacts_df"), res_df
+                with st.expander("🔬 Full verification results (every candidate, all verdicts)"):
+                    st.dataframe(res_df, use_container_width=True, height=400)
+                    st.download_button(
+                        f"📥 Download full results ({len(res_df)} rows)",
+                        data=to_csv_bytes(res_df),
+                        file_name=f"{task}_verification_results_full.csv",
+                        mime="text/csv", use_container_width=True,
+                        key=f"{task}_dl_full",
                     )
-                    if apollo_df.empty:
-                        st.info("No deliverable or risky emails yet — keep clicking "
-                                "**Refresh Results** as verification progresses.")
-                    else:
-                        st.dataframe(apollo_df, use_container_width=True, height=360)
-                        st.download_button(
-                            f"📥 Download Verified Contacts ({len(apollo_df)}) — Apollo format",
-                            data=to_csv_bytes(apollo_df),
-                            file_name="verified_contacts_apollo.csv",
-                            mime="text/csv",
-                            type="primary",
-                            use_container_width=True,
-                        )
 
-                    with st.expander("🔬 Full verification results (every candidate, all verdicts)"):
-                        st.dataframe(res_df, use_container_width=True, height=400)
-                        st.download_button(
-                            f"📥 Download full results ({len(res_df)} rows)",
-                            data=to_csv_bytes(res_df),
-                            file_name="verification_results_full.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                        )
 
-# Instructions
+# ======================================================================
+# Two independent tasks, each with its own page count and its own VPS pool.
+# ======================================================================
+task1_tab, task2_tab = st.tabs(["🅰️ Task 1", "🅱️ Task 2"])
+
+with task1_tab:
+    render_task("t1", "Task 1", 25, "coordinator_url", "coordinator_token")
+
+with task2_tab:
+    render_task("t2", "Task 2", 50, "coordinator2_url", "coordinator2_token")
+
+
 with st.expander("ℹ️ Instructions"):
     st.markdown("""
-    ### How to use:
-    1. Navigate through the page tabs (Page 1, Page 2, etc.)
-    2. Copy the raw JSON data from each Apollo page
-    3. Paste it into the corresponding page tab
-    4. Repeat for all pages you want to include
-    5. Click "Convert All Pages to CSV" button
-    6. Review the preview and statistics
-    7. Click "Download CSV" to save the combined file
-    8. In **Step 2**, pick how many emails to generate per person (2–7) and click "Generate Emails"
-    9. Download the **Verification Queue** CSV — that is the file the SMTP verifier consumes
+    ### Two independent tasks
+    - **Task 1** has **25 pages** and uses its own VPS pool (Secrets:
+      `coordinator_url` / `coordinator_token`).
+    - **Task 2** has **50 pages** and uses a **separate** VPS pool (Secrets:
+      `coordinator2_url` / `coordinator2_token`).
+    - Both run **in parallel** — paste, generate and verify in each tab independently.
 
-    ### Email generation:
-    - Each person receives 2–7 distinct addresses built from their name plus their company domain
-    - The domain comes from their existing corporate email first, then `org_website`
-    - Free-mail records (gmail, yahoo, outlook…) are skipped — permutations there never land and
-      probing those servers gets your sending IP blocked
-    - Patterns are drawn by **weighted random sampling**, so common conventions
-      (`first.last`, `flast`) show up most often but the exact mix varies per person
-    - Accents are stripped (`José` → `jose`) and multi-part surnames are joined
-      (`Van Der Berg` → `vanderberg`)
-    - "Reproducible" keeps the draw stable across reruns; change the shuffle seed to redraw
-
-    ### Features:
-    - ✅ Combines data from multiple pages
-    - ✅ Shows processing status for each page
-    - ✅ Displays comprehensive statistics
-    - ✅ Handles errors gracefully (skips invalid pages)
-    - ✅ All records included (no duplicates removed)
-    
-    ### Supported JSON formats:
-    The app automatically detects and handles both formats:
-    
-    **Format 1 - People structure:**
-    - JSON with a `people` array
-    - Nested `organization` object with company details
-    - Direct email and phone fields
-    
-    **Format 2 - Contacts structure:**
-    - JSON with a `contacts` array
-    - `contact_emails` array for multiple emails
-    - `phone_numbers` array for multiple phones
-    - Direct `organization_name` field
-    
-    Both formats are automatically detected and converted to a unified CSV structure.
-    
-    ### Tips:
-    - You don't need to fill all 25 pages - only paste data in the pages you have
-    - Empty pages will be skipped automatically
-    - All records are included in the CSV (no duplicates removed)
+    ### In each task
+    1. Paste raw Apollo JSON into the page tabs
+    2. Click **Convert All Pages to CSV**
+    3. In **Step 2**, choose emails-per-person and click **Generate Emails**
+    4. In **Step 3**, click **Send to Verifier** — that task's VPS pool checks them
+    5. Download **Verified Contacts (Apollo format)** — deliverable + risky only, no status columns
     """)
