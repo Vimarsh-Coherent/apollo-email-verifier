@@ -27,7 +27,15 @@ class StateStore:
         conn = getattr(self._local, "conn", None)
         if conn is None:
             conn = sqlite3.connect(self.path, timeout=30, isolation_level=None)
-            conn.execute("PRAGMA journal_mode=WAL")
+            # WAL mode needs a shared-memory (-shm) file, which some virtualized
+            # VPS filesystems don't support - a 2nd concurrent connection then
+            # fails with "unable to open database file". The rollback journal
+            # works everywhere; our in-process write lock + busy_timeout give us
+            # the concurrency we need.
+            try:
+                conn.execute("PRAGMA journal_mode=DELETE")
+            except sqlite3.Error:
+                pass
             conn.execute("PRAGMA busy_timeout=30000")
             conn.row_factory = sqlite3.Row
             self._local.conn = conn
