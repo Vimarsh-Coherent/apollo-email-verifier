@@ -86,8 +86,8 @@ EOF
 
     write_worker_unit "http://127.0.0.1:$PORT" "$TOKEN"
     systemctl daemon-reload
-    systemctl enable --now verifier-coordinator.service
-    systemctl enable --now verifier-worker.service
+    systemctl enable verifier-coordinator.service verifier-worker.service >/dev/null 2>&1 || true
+    systemctl restart verifier-coordinator.service verifier-worker.service
     IP="$(curl -4 -s https://ifconfig.me || echo YOUR_VPS_IP)"
     echo
     echo "===============  COORDINATOR + WORKER installed (auto-start on)  ==============="
@@ -101,7 +101,8 @@ else
     : "${TOKEN:?set TOKEN=<coordinator token>}"
     write_worker_unit "$COORD" "$TOKEN"
     systemctl daemon-reload
-    systemctl enable --now verifier-worker.service
+    systemctl enable verifier-worker.service >/dev/null 2>&1 || true
+    systemctl restart verifier-worker.service
     echo
     echo "Worker '$NODE' installed and running (auto-start on boot) -> $COORD"
     echo "Status: systemctl status verifier-worker   |   Logs: journalctl -u verifier-worker -f"
