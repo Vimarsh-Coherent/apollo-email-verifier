@@ -138,6 +138,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "not found"})
         except Exception as exc:  # keep the server alive on a bad request
             self._send(500, {"error": str(exc)})
+        finally:
+            self.store.close_conn()  # per-request cleanup - avoid FD leak
 
     def do_POST(self):
         if not self._authed():
@@ -192,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": f"missing field {exc}"})
         except Exception as exc:
             self._send(500, {"error": str(exc)})
+        finally:
+            self.store.close_conn()  # per-request cleanup - avoid FD leak
 
 
 def make_handler(store, token):

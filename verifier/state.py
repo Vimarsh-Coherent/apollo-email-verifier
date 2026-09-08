@@ -33,6 +33,20 @@ class StateStore:
             self._local.conn = conn
         return conn
 
+    def close_conn(self):
+        """Close and drop this thread's cached connection. The coordinator calls
+        this after each HTTP request: ThreadingHTTPServer spawns a fresh thread
+        per request, so without this the per-thread connections (and their file
+        descriptors) accumulate until the process hits its open-file limit and
+        SQLite fails with 'unable to open database file'."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
+
     def _init_schema(self):
         conn = self._conn()
         conn.executescript(
