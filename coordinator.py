@@ -32,6 +32,7 @@ import signal
 import sys
 import threading
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from verifier.leased_store import LeasedStore
@@ -137,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(404, {"error": "not found"})
         except Exception as exc:  # keep the server alive on a bad request
+            traceback.print_exc()
             self._send(500, {"error": str(exc)})
         finally:
             self.store.close_conn()  # per-request cleanup - avoid FD leak
@@ -193,6 +195,7 @@ class Handler(BaseHTTPRequestHandler):
         except KeyError as exc:
             self._send(400, {"error": f"missing field {exc}"})
         except Exception as exc:
+            traceback.print_exc()
             self._send(500, {"error": str(exc)})
         finally:
             self.store.close_conn()  # per-request cleanup - avoid FD leak

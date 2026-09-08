@@ -76,7 +76,7 @@ Type=simple
 User=root
 WorkingDirectory=$DIR
 LimitNOFILE=1048576
-ExecStart=$PY $DIR/coordinator.py --input seed.csv --bind 0.0.0.0:$PORT --token $TOKEN --state coordinator_state.db --output results.csv
+ExecStart=$PY $DIR/coordinator.py --input $DIR/seed.csv --bind 0.0.0.0:$PORT --token $TOKEN --state $DIR/coordinator_state.db --output $DIR/results.csv
 Restart=always
 RestartSec=5
 
