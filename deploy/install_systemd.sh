@@ -17,8 +17,19 @@ NODE="${NODE:-vps1}"
 PORT="${PORT:-8900}"
 CONFIG="${CONFIG:-verifier_config.json}"
 
-[ -x "$PY" ] || { echo "ERROR: venv not found at $PY - run start_vps.sh once first."; exit 1; }
-[ -f "$DIR/$CONFIG" ] || { echo "ERROR: $CONFIG missing - cp verifier_config.vpsN.json verifier_config.json"; exit 1; }
+[ -f "$DIR/$CONFIG" ] || { echo "ERROR: $CONFIG missing - cp verifier_config.<name>.json verifier_config.json"; exit 1; }
+
+# Self-contained setup: create the private venv if it isn't there yet, so this
+# script works on a fresh clone without needing start_vps.sh first.
+if [ ! -x "$PY" ]; then
+    echo "== Dependencies (private venv - system Python untouched) =="
+    apt-get update -y >/dev/null
+    apt-get install -y python3 python3-venv python3-pip curl >/dev/null
+    rm -rf "$DIR/venv"
+    python3 -m venv "$DIR/venv"
+    "$DIR/venv/bin/pip" install -q --upgrade pip
+    "$DIR/venv/bin/pip" install -q -r "$DIR/requirements.txt"
+fi
 
 write_worker_unit() {
     local coord="$1" token="$2"
