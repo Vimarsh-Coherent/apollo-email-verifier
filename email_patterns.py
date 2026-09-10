@@ -174,11 +174,14 @@ def _seed_for(row, index, salt):
     return int(hashlib.md5(key.encode("utf-8")).hexdigest()[:16], 16)
 
 
-def generate_for_person(row, index, count, salt=0, reproducible=True):
+def generate_for_person(row, index, count, salt=0, reproducible=True,
+                        preferred_pattern=None):
     """Return a list of {email, pattern, rank, ...} dicts for one person.
 
     Fewer than `count` items come back when the name cannot fill that many
-    distinct patterns (e.g. a first name with no surname).
+    distinct patterns (e.g. a first name with no surname). If `preferred_pattern`
+    (a template like "{f}.{l}", detected from a colleague's known email) is
+    given, that convention is generated first, then the standard catalogue.
     """
     first, last = split_name(row)
     domain, domain_source = resolve_domain(row)
@@ -199,13 +202,11 @@ def generate_for_person(row, index, count, salt=0, reproducible=True):
     candidates = []
     seen = set()
 
-    # Over-sample so duplicates collapsing (e.g. "first" == "flast" for short
-    # names) still leaves us with `count` distinct addresses where possible.
-    for pattern_name, template in _weighted_sample(usable, len(usable), rng):
+    def _add(pattern_name, template):
         local = template.format(**values).strip("._-")
         local = re.sub(r"[._-]{2,}", ".", local)
         if not local or local in seen:
-            continue
+            return
         seen.add(local)
         email = f"{local}@{domain}"
         candidates.append({
@@ -213,9 +214,22 @@ def generate_for_person(row, index, count, salt=0, reproducible=True):
             "email": email,
             "is_known": email == known_email,
         })
+
+    # The company's own convention first, if we detected one.
+    if preferred_pattern:
+        pname = next((n for n, t, _ in EMAIL_PATTERNS if t == preferred_pattern),
+                     "company_pattern")
+        if last or ("{l}" not in preferred_pattern and "{li}" not in preferred_pattern):
+            _add(pname, preferred_pattern)
+
+    # Over-sample so duplicates collapsing (e.g. "first" == "flast" for short
+    # names) still leaves us with `count` distinct addresses where possible.
+    for pattern_name, template in _weighted_sample(usable, len(usable), rng):
         if len(candidates) >= count:
             break
+        _add(pattern_name, template)
 
+    candidates = candidates[:count]
     for rank, candidate in enumerate(candidates, start=1):
         candidate["rank"] = rank
 

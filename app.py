@@ -6,6 +6,7 @@ import pandas as pd
 from io import StringIO
 
 from email_patterns import EMAIL_PATTERNS, build_candidates
+import excel_leads
 
 st.set_page_config(
     page_title="Apollo Scraper - JSON to CSV Converter",
@@ -147,6 +148,54 @@ def _secret(key):
         return st.secrets.get(key, "")
     except Exception:
         return ""
+
+
+# ----------------------------------------------------------------------
+# Multi-pool helpers (Excel bulk mode uses BOTH Task 1 + Task 2 pools).
+# ----------------------------------------------------------------------
+def _pools():
+    """Return the configured coordinator pools: [(label, url, token), ...]."""
+    pools = []
+    if _secret("coordinator_url") and _secret("coordinator_token"):
+        pools.append(("Task 1", _secret("coordinator_url"), _secret("coordinator_token")))
+    if _secret("coordinator2_url") and _secret("coordinator2_token"):
+        pools.append(("Task 2", _secret("coordinator2_url"), _secret("coordinator2_token")))
+    return pools
+
+
+def _seed_split(candidates, pools, clear):
+    """Split candidates across pools by domain (each domain -> one pool, so
+    per-domain rate limiting stays correct) and seed each pool."""
+    import hashlib
+    groups = [[] for _ in pools]
+    for c in candidates:
+        h = int(hashlib.md5((c.get("domain") or "").encode()).hexdigest(), 16)
+        groups[h % len(pools)].append(c)
+    total = 0
+    for (label, url, token), group in zip(pools, groups):
+        for i in range(0, len(group), 1000):
+            part = group[i:i + 1000]
+            coord_request(url, token, "POST", "/seed",
+                          {"candidates": part, "clear": clear and i == 0})
+            total += len(part)
+    return total
+
+
+def _combined_status(pools):
+    """Merge status + export across all pools."""
+    import collections
+    sc, vc, rows = collections.Counter(), collections.Counter(), []
+    for label, url, token in pools:
+        try:
+            status = coord_request(url, token, "GET", "/status")
+            for k, v in status.get("counts", {}).get("status", {}).items():
+                sc[k] += v
+            for k, v in status.get("counts", {}).get("verdict", {}).items():
+                vc[k] += v
+            rows += coord_request(url, token, "GET", "/export").get("rows", [])
+        except RuntimeError:
+            pass
+    return sc, vc, rows
 
 
 # Columns that carry an email *status*/verdict - stripped from the final sheet.
@@ -509,13 +558,124 @@ def render_task(task, label, num_pages, url_key, token_key):
 # ======================================================================
 # Two independent tasks, each with its own page count and its own VPS pool.
 # ======================================================================
-task1_tab, task2_tab = st.tabs(["🅰️ Task 1", "🅱️ Task 2"])
+def render_excel_tab():
+    st.markdown(
+        "Upload a **leadership Excel** (one row per company, role columns like "
+        "MD/CEO/CTO). It dedupes people (nobody appears under two roles), drops "
+        "role mailboxes (sales@/info@/…), and splits the work across **both** VPS "
+        "pools running in parallel."
+    )
+    pools = _pools()
+    if not pools:
+        st.warning("No VPS pools configured — set `coordinator_url`/`coordinator_token` "
+                   "(and `coordinator2_*`) in Secrets.")
+    else:
+        st.caption(f"🔗 {len(pools)} pool(s) connected: " + ", ".join(p[0] for p in pools))
+
+    up = st.file_uploader("Upload leadership Excel (.xlsx)", type=["xlsx"], key="ex_up")
+    if up is not None and st.button("📄 Process file", key="ex_proc"):
+        with st.spinner("Reading, deduping, deriving domains…"):
+            st.session_state["ex_r"] = excel_leads.process_excel(up)
+        st.session_state.pop("ex_started", None)
+
+    r = st.session_state.get("ex_r")
+    if r is None or len(r) == 0:
+        return
+
+    ph = r["phase"].value_counts().to_dict()
+    st.success(f"✅ {len(r)} unique people after dedup + role-email filtering.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("① Known emails", ph.get("known", 0))
+    c2.metric("② Generate (domain known)", ph.get("generate", 0))
+    c3.metric("③ Need domain (DeepSeek)", ph.get("needs_domain", 0))
+    with st.expander("👀 Preview processed people"):
+        st.dataframe(r.head(100), use_container_width=True, height=280)
+
+    if not pools:
+        return
+
+    st.divider()
+    st.markdown("#### ① Verify known emails (no generation — sent straight to verify)")
+    if st.button(f"🚀 Send {ph.get('known', 0)} known emails to both pools",
+                 key="ex_p1", type="primary"):
+        n = _seed_split(excel_leads.known_queue(r), pools, clear=True)
+        st.session_state["ex_started"] = True
+        st.success(f"Queued {n} known emails, split across {len(pools)} pool(s).")
+
+    st.markdown("#### ② Generate guesses & verify (company domain known)")
+    if st.button(f"🎲 Generate + send for {ph.get('generate', 0)} people", key="ex_p2"):
+        n = _seed_split(excel_leads.generated_queue(r, 5), pools, clear=False)
+        st.session_state["ex_started"] = True
+        st.success(f"Queued {n} generated candidates (added to the run).")
+
+    st.markdown("#### ③ Find missing domains with DeepSeek, then generate & verify")
+    dkey = _secret("deepseek_api_key")
+    if not dkey:
+        st.info(f"Add `deepseek_api_key` to Secrets to look up domains for the "
+                f"{ph.get('needs_domain', 0)} remaining people.")
+    elif st.button("🔍 Look up domains + generate + send", key="ex_p3"):
+        nd = r[r["phase"] == "needs_domain"]
+        companies = sorted(c for c in nd["company"].unique() if c)
+        prog = st.progress(0.0, text="Asking DeepSeek…")
+        mapping = excel_leads.deepseek_find_domains(
+            companies, dkey,
+            on_progress=lambda a, b: prog.progress(a / b, text=f"{a}/{b} companies"),
+        )
+        prog.empty()
+        r2 = r.copy()
+        for i in r2.index[r2["phase"] == "needs_domain"]:
+            d = mapping.get(r2.at[i, "company"])
+            if d:
+                r2.at[i, "domain"] = d
+                r2.at[i, "phase"] = "generate"
+        st.session_state["ex_r"] = r2
+        newly = r2[(r2["company"].isin(mapping.keys())) & (r2["domain"] != "")]
+        n = _seed_split(excel_leads.generated_queue(newly, 5), pools, clear=False)
+        st.session_state["ex_started"] = True
+        st.success(f"DeepSeek found domains for {len(mapping)} companies; "
+                   f"queued {n} candidates.")
+
+    st.divider()
+    if st.button("🔄 Refresh Results", key="ex_refresh") or st.session_state.get("ex_started"):
+        sc, vc, rows = _combined_status(pools)
+        total = sum(sc.values())
+        done = sc.get("done", 0) + sc.get("error", 0)
+        st.progress((done / total) if total else 0.0,
+                    text=f"{done}/{total} addresses checked across both pools")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("✅ Deliverable", vc.get("deliverable", 0) + vc.get("risky", 0))
+        m2.metric("❌ Undeliverable", vc.get("undeliverable", 0))
+        m3.metric("❔ Unknown", vc.get("unknown", 0))
+        if total and done >= total:
+            st.success("🎉 Verification complete.")
+        if rows:
+            apollo = build_apollo_output(r, pd.DataFrame(rows))
+            st.markdown("#### 📇 Verified people (deliverable, one row per person)")
+            if apollo.empty:
+                st.info("No deliverable emails yet — click **Refresh Results** as it runs.")
+            else:
+                keep = [c for c in ["company", "designation", "name", "email", "domain"]
+                        if c in apollo.columns]
+                st.dataframe(apollo[keep] if keep else apollo,
+                             use_container_width=True, height=340)
+                st.download_button(
+                    f"📥 Download verified contacts ({len(apollo)})",
+                    data=to_csv_bytes(apollo[keep] if keep else apollo),
+                    file_name="excel_verified_contacts.csv", mime="text/csv",
+                    type="primary", use_container_width=True, key="ex_dl",
+                )
+
+
+task1_tab, task2_tab, excel_tab = st.tabs(["🅰️ Task 1", "🅱️ Task 2", "📤 Excel (both pools)"])
 
 with task1_tab:
     render_task("t1", "Task 1", 25, "coordinator_url", "coordinator_token")
 
 with task2_tab:
     render_task("t2", "Task 2", 50, "coordinator2_url", "coordinator2_token")
+
+with excel_tab:
+    render_excel_tab()
 
 
 with st.expander("ℹ️ Instructions"):
