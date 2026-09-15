@@ -7,6 +7,7 @@ from io import StringIO
 
 from email_patterns import EMAIL_PATTERNS, build_candidates
 import excel_leads
+import bounce_check
 
 st.set_page_config(
     page_title="Apollo Scraper - JSON to CSV Converter",
@@ -666,7 +667,119 @@ def render_excel_tab():
                 )
 
 
-task1_tab, task2_tab, excel_tab = st.tabs(["🅰️ Task 1", "🅱️ Task 2", "📤 Excel (both pools)"])
+def render_bounce_tab():
+    st.markdown(
+        "**Send a real email** to each address and detect bounces by reading your "
+        "own inbox. This is different from the SMTP verifier (which never sends) — "
+        "it gives ground-truth on the *unknown* / *risky* addresses."
+    )
+    st.error(
+        "⚠️ This **sends real email**. High bounce volume can get your account "
+        "**suspended**. Use a **dedicated** account, a **vetted list** (not raw "
+        "guesses), and small daily volume."
+    )
+
+    sender = _secret("sender_email")
+    pw = _secret("sender_app_password")
+    smtp_host = _secret("smtp_host") or "smtp.gmail.com"
+    smtp_port = int(_secret("smtp_port") or 587)
+    imap_host = _secret("imap_host") or "imap.gmail.com"
+    use_ssl = str(_secret("smtp_ssl")).lower() in ("1", "true", "yes")
+
+    if not (sender and pw):
+        st.warning(
+            "Add these to **Secrets** to enable bounce checking:\n"
+            "```toml\nsender_email = \"you@gmail.com\"\n"
+            "sender_app_password = \"your-16-char-app-password\"\n```\n"
+            "(Gmail: create an **App Password** at myaccount.google.com → Security → "
+            "App passwords. Optionally set `smtp_host`/`smtp_port`/`imap_host` for "
+            "non-Gmail providers.)"
+        )
+        return
+    st.caption(f"📧 Sender: **{sender}** · SMTP {smtp_host}:{smtp_port} · IMAP {imap_host}")
+
+    up = st.file_uploader("Upload a CSV with an **Email** column", type=["csv"], key="bc_up")
+    emails = []
+    if up is not None:
+        try:
+            bdf = pd.read_csv(up)
+            col = next((c for c in bdf.columns if c.lower() == "email"), None)
+            if col:
+                emails = [e for e in bdf[col].astype(str).tolist() if "@" in e]
+                st.success(f"Loaded {len(emails)} email(s) from column '{col}'.")
+            else:
+                st.error("No 'Email' column found in the CSV.")
+        except Exception as exc:
+            st.error(f"Couldn't read CSV: {exc}")
+
+    st.markdown("#### Message to send")
+    subject = st.text_input("Subject", "Quick question", key="bc_subj")
+    body = st.text_area("Body", "Hello,\n\nReaching out regarding a quick question.\n\nThanks",
+                        key="bc_body", height=120)
+    c1, c2 = st.columns(2)
+    with c1:
+        cap = st.number_input("Max to send this run (volume cap)", 1, 2000, 100, key="bc_cap")
+    with c2:
+        delay = st.number_input("Seconds between sends", 1.0, 30.0, 3.0, key="bc_delay")
+
+    if st.button(f"📨 Send probe emails to {min(len(emails), int(cap))} address(es)",
+                 type="primary", disabled=not emails, key="bc_send"):
+        prog = st.progress(0.0, text="Sending…")
+        try:
+            res = bounce_check.send_probes(
+                smtp_host, smtp_port, sender, pw, emails, subject, body,
+                delay=float(delay), limit=int(cap), use_ssl=use_ssl,
+                on_progress=lambda a, b: prog.progress(a / b, text=f"Sent {a}/{b}"),
+            )
+            prog.empty()
+            sent_ok = [e for e, v in res.items() if v == "sent"]
+            rejected = [e for e, v in res.items() if v == "rejected"]
+            st.session_state["bc_sent"] = sent_ok + rejected
+            st.session_state["bc_rejected"] = rejected
+            st.success(f"Sent {len(sent_ok)} · instantly rejected {len(rejected)} "
+                       f"(those are already-confirmed bad).")
+            errs = {e: v for e, v in res.items() if v.startswith("error")}
+            if errs:
+                st.warning(f"{len(errs)} send error(s) — first: {list(errs.values())[0]}")
+        except Exception as exc:
+            prog.empty()
+            st.error(f"Send failed (check credentials / app password): {exc}")
+
+    sent = st.session_state.get("bc_sent", [])
+    if sent:
+        st.divider()
+        st.markdown(f"#### Check for bounces ({len(sent)} sent)")
+        st.caption("Bounces take a few minutes to a few hours to arrive. Click below "
+                   "after a wait to scan your inbox.")
+        if st.button("🔍 Check bounces now", key="bc_check"):
+            with st.spinner("Reading inbox for bounce notices…"):
+                try:
+                    bounced = bounce_check.read_bounces(imap_host, sender, pw, sent)
+                except Exception as exc:
+                    bounced = None
+                    st.error(f"IMAP read failed (check app password / IMAP enabled): {exc}")
+            if bounced is not None:
+                rejected = set(st.session_state.get("bc_rejected", []))
+                bad = {b.lower() for b in bounced} | {r.lower() for r in rejected}
+                rows = [{"Email": e, "Result": "❌ Bounced" if e.lower() in bad
+                         else "✅ Delivered (no bounce yet)"} for e in sent]
+                bdf = pd.DataFrame(rows)
+                n_bad = (bdf["Result"].str.startswith("❌")).sum()
+                m1, m2 = st.columns(2)
+                m1.metric("❌ Bounced (invalid)", int(n_bad))
+                m2.metric("✅ No bounce (likely valid)", len(sent) - int(n_bad))
+                st.dataframe(bdf, use_container_width=True, height=320)
+                st.download_button("📥 Download bounce results", to_csv_bytes(bdf),
+                                   "bounce_results.csv", "text/csv",
+                                   use_container_width=True, key="bc_dl")
+                st.caption("Note: 'no bounce yet' isn't a guarantee — some servers "
+                           "accept-then-drop silently (catch-all), and slow bounces "
+                           "can arrive later. Re-check after a few hours.")
+
+
+task1_tab, task2_tab, excel_tab, bounce_tab = st.tabs(
+    ["🅰️ Task 1", "🅱️ Task 2", "📤 Excel (both pools)", "📧 Bounce Check"]
+)
 
 with task1_tab:
     render_task("t1", "Task 1", 25, "coordinator_url", "coordinator_token")
@@ -676,6 +789,9 @@ with task2_tab:
 
 with excel_tab:
     render_excel_tab()
+
+with bounce_tab:
+    render_bounce_tab()
 
 
 with st.expander("ℹ️ Instructions"):
