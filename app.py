@@ -246,6 +246,42 @@ def build_apollo_output(contacts_df, res_df):
     return out
 
 
+def build_unknown_output(contacts_df, res_df):
+    """Every candidate address verification could NOT confirm (verdict 'unknown')
+    — timeouts, greylisting, fresh-IP tarpitting. These are the addresses worth
+    bounce-testing. One row per email, with the person's details attached."""
+    if res_df is None or res_df.empty:
+        return pd.DataFrame()
+    d = res_df.copy()
+    d = d[d.get("verdict", "") == "unknown"]
+    if d.empty:
+        return pd.DataFrame()
+    d = d.drop_duplicates(subset=["candidate_email"])
+
+    contacts = contacts_df.reset_index(drop=True) if contacts_df is not None else None
+    rows = []
+    for _, hit in d.iterrows():
+        rec = {
+            "company": "", "designation": "",
+            "name": hit.get("name", ""),
+            "email": hit.get("candidate_email", ""),
+            "domain": hit.get("domain", ""),
+            "pattern": hit.get("pattern", ""),
+        }
+        if contacts is not None:
+            try:
+                idx = int(hit["row_id"])
+                if 0 <= idx < len(contacts):
+                    p = contacts.iloc[idx].to_dict()
+                    rec["company"] = p.get("company", p.get("org_name", "")) or ""
+                    rec["designation"] = p.get("designation", p.get("title", "")) or ""
+                    rec["name"] = rec["name"] or p.get("name", "")
+            except (TypeError, ValueError, KeyError):
+                pass
+        rows.append(rec)
+    return pd.DataFrame(rows)
+
+
 # ======================================================================
 # One self-contained task pipeline (pages -> convert -> generate -> verify).
 # Called once per tab with its own namespace and its own VPS coordinator, so
@@ -545,6 +581,18 @@ def render_task(task, label, num_pages, url_key, token_key):
                         use_container_width=True, key=f"{task}_dl_apollo",
                     )
 
+                unknown_df = build_unknown_output(
+                    st.session_state.get(f"{task}_contacts_df"), res_df
+                )
+                if not unknown_df.empty:
+                    st.download_button(
+                        f"📥 Download UNKNOWN emails ({len(unknown_df)}) — for bounce testing",
+                        data=to_csv_bytes(unknown_df),
+                        file_name=f"{task}_unknown_emails.csv",
+                        mime="text/csv", use_container_width=True,
+                        key=f"{task}_dl_unknown",
+                    )
+
                 with st.expander("🔬 Full verification results (every candidate, all verdicts)"):
                     st.dataframe(res_df, use_container_width=True, height=400)
                     st.download_button(
@@ -664,6 +712,20 @@ def render_excel_tab():
                     data=to_csv_bytes(apollo[keep] if keep else apollo),
                     file_name="excel_verified_contacts.csv", mime="text/csv",
                     type="primary", use_container_width=True, key="ex_dl",
+                )
+
+            unknown_df = build_unknown_output(r, pd.DataFrame(rows))
+            if not unknown_df.empty:
+                st.markdown("#### ❔ Unknown emails (verification inconclusive)")
+                st.caption("Timeouts / greylisting / fresh-IP tarpitting — couldn't be "
+                           "confirmed either way. Download and feed into the **Bounce "
+                           "Check** tab to send real probes.")
+                st.dataframe(unknown_df, use_container_width=True, height=300)
+                st.download_button(
+                    f"📥 Download UNKNOWN emails ({len(unknown_df)})",
+                    data=to_csv_bytes(unknown_df),
+                    file_name="excel_unknown_emails.csv", mime="text/csv",
+                    use_container_width=True, key="ex_dl_unknown",
                 )
 
 
