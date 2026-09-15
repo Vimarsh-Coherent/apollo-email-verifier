@@ -732,7 +732,9 @@ def render_excel_tab():
 def _norm_sender(s):
     return {
         "email": str(s.get("email", "")).strip(),
-        "app_password": str(s.get("app_password", "")).strip(),
+        # Gmail displays app passwords with spaces ("jkte dbne kzdk wske"); the
+        # real secret has none — strip ALL whitespace so either form works.
+        "app_password": "".join(str(s.get("app_password", "")).split()),
         "smtp_host": str(s.get("smtp_host") or "smtp.gmail.com").strip(),
         "smtp_port": int(s.get("smtp_port") or 587),
         "imap_host": str(s.get("imap_host") or "imap.gmail.com").strip(),
