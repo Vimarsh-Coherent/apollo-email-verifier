@@ -69,6 +69,98 @@ def send_probes(smtp_host, smtp_port, sender, app_password, targets, subject, bo
     return results
 
 
+def _build_msg(sender, to, subject, body):
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = subject
+    msg["From"] = sender
+    msg["To"] = to
+    msg["Message-ID"] = make_msgid()
+    msg["Date"] = formatdate(localtime=True)
+    return msg
+
+
+def _open_smtp(s):
+    """Open + authenticate one sender account. `s` is a dict with keys
+    email, app_password, smtp_host, smtp_port, use_ssl."""
+    if s.get("use_ssl"):
+        srv = smtplib.SMTP_SSL(s["smtp_host"], s["smtp_port"], timeout=30)
+        srv.ehlo()
+    else:
+        srv = smtplib.SMTP(s["smtp_host"], s["smtp_port"], timeout=30)
+        srv.ehlo()
+        srv.starttls()
+        srv.ehlo()
+    srv.login(s["email"], s["app_password"])
+    return srv
+
+
+def send_probes_multi(senders, targets, subject, body,
+                      delay=2.0, limit=None, on_progress=None):
+    """Round-robin `targets` across multiple sender accounts to spread volume.
+
+    `senders` is a list of dicts (email, app_password, smtp_host, smtp_port,
+    use_ssl). Returns (results, login_errors) where results maps
+    email -> {'status': 'sent'|'rejected'|'error: ...', 'via': sender_email}.
+    """
+    targets = list(dict.fromkeys(a.strip() for a in targets if a and "@" in a))
+    if limit:
+        targets = targets[:limit]
+
+    live = []            # [[sender_dict, connection], ...] — only accounts that logged in
+    login_errors = {}
+    for s in senders:
+        try:
+            live.append([s, _open_smtp(s)])
+        except Exception as exc:
+            login_errors[s.get("email", "?")] = f"{type(exc).__name__}: {exc}"
+
+    results = {}
+    if not live:
+        return results, login_errors
+
+    try:
+        for i, to in enumerate(targets):
+            slot = live[i % len(live)]
+            s = slot[0]
+            try:
+                slot[1].sendmail(s["email"], [to], _build_msg(s["email"], to, subject, body).as_string())
+                results[to] = {"status": "sent", "via": s["email"]}
+            except smtplib.SMTPRecipientsRefused:
+                results[to] = {"status": "rejected", "via": s["email"]}
+            except Exception:
+                # One reconnect attempt (dropped connection / timeout), then give up.
+                try:
+                    slot[1] = _open_smtp(s)
+                    slot[1].sendmail(s["email"], [to], _build_msg(s["email"], to, subject, body).as_string())
+                    results[to] = {"status": "sent", "via": s["email"]}
+                except Exception as exc2:
+                    results[to] = {"status": f"error: {type(exc2).__name__}: {exc2}",
+                                   "via": s["email"]}
+            if on_progress:
+                on_progress(i + 1, len(targets))
+            time.sleep(delay)
+    finally:
+        for _, srv in live:
+            try:
+                srv.quit()
+            except Exception:
+                pass
+    return results, login_errors
+
+
+def read_bounces_multi(senders, sent_addresses, scan_last=800):
+    """Scan every account's inbox for bounces. Returns (bounced_set, errors)."""
+    bounced = set()
+    errors = {}
+    for s in senders:
+        try:
+            bounced |= read_bounces(s["imap_host"], s["email"],
+                                    s["app_password"], sent_addresses, scan_last)
+        except Exception as exc:
+            errors[s.get("email", "?")] = f"{type(exc).__name__}: {exc}"
+    return bounced, errors
+
+
 def _is_bounce(msg):
     frm = (msg.get("From") or "").lower()
     subj = (msg.get("Subject") or "").lower()

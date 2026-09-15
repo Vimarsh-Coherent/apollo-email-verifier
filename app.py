@@ -729,36 +729,86 @@ def render_excel_tab():
                 )
 
 
+def _norm_sender(s):
+    return {
+        "email": str(s.get("email", "")).strip(),
+        "app_password": str(s.get("app_password", "")).strip(),
+        "smtp_host": str(s.get("smtp_host") or "smtp.gmail.com").strip(),
+        "smtp_port": int(s.get("smtp_port") or 587),
+        "imap_host": str(s.get("imap_host") or "imap.gmail.com").strip(),
+        "use_ssl": str(s.get("smtp_ssl", "")).lower() in ("1", "true", "yes"),
+    }
+
+
+def _load_senders():
+    """Load one or many sender mailboxes from Secrets.
+
+    New multi-account form (preferred):
+        [[senders]]
+        email = "a@gmail.com"
+        app_password = "...."
+    Legacy single-account form (still supported):
+        sender_email = "a@gmail.com"
+        sender_app_password = "...."
+    """
+    raw = None
+    try:
+        raw = st.secrets.get("senders")
+    except Exception:
+        raw = None
+    out = []
+    if raw:
+        for s in raw:
+            d = _norm_sender(dict(s))
+            if d["email"] and d["app_password"]:
+                out.append(d)
+    else:
+        em, pw = _secret("sender_email"), _secret("sender_app_password")
+        if em and pw:
+            out.append(_norm_sender({
+                "email": em, "app_password": pw,
+                "smtp_host": _secret("smtp_host"), "smtp_port": _secret("smtp_port"),
+                "imap_host": _secret("imap_host"), "smtp_ssl": _secret("smtp_ssl"),
+            }))
+    return out
+
+
 def render_bounce_tab():
     st.markdown(
         "**Send a real email** to each address and detect bounces by reading your "
-        "own inbox. This is different from the SMTP verifier (which never sends) — "
-        "it gives ground-truth on the *unknown* / *risky* addresses."
+        "own inbox(es). This is different from the SMTP verifier (which never sends) "
+        "— it gives ground-truth on the *unknown* / *risky* addresses."
     )
     st.error(
-        "⚠️ This **sends real email**. High bounce volume can get your account "
-        "**suspended**. Use a **dedicated** account, a **vetted list** (not raw "
-        "guesses), and small daily volume."
+        "⚠️ This **sends real email**. High bounce volume can get an account "
+        "**suspended**. Use **dedicated** accounts, a **vetted list** (not raw "
+        "guesses), and small daily volume. Multiple mailboxes spread the load."
     )
 
-    sender = _secret("sender_email")
-    pw = _secret("sender_app_password")
-    smtp_host = _secret("smtp_host") or "smtp.gmail.com"
-    smtp_port = int(_secret("smtp_port") or 587)
-    imap_host = _secret("imap_host") or "imap.gmail.com"
-    use_ssl = str(_secret("smtp_ssl")).lower() in ("1", "true", "yes")
-
-    if not (sender and pw):
+    senders = _load_senders()
+    if not senders:
         st.warning(
-            "Add these to **Secrets** to enable bounce checking:\n"
+            "Add **one or more** mailboxes to **Secrets** to enable bounce checking.\n\n"
+            "**Multiple mailboxes (recommended — spreads volume):**\n"
+            "```toml\n[[senders]]\nemail = \"acct1@gmail.com\"\n"
+            "app_password = \"16-char-app-password\"\n\n"
+            "[[senders]]\nemail = \"acct2@gmail.com\"\n"
+            "app_password = \"16-char-app-password\"\n```\n"
+            "**Single mailbox (also works):**\n"
             "```toml\nsender_email = \"you@gmail.com\"\n"
-            "sender_app_password = \"your-16-char-app-password\"\n```\n"
-            "(Gmail: create an **App Password** at myaccount.google.com → Security → "
-            "App passwords. Optionally set `smtp_host`/`smtp_port`/`imap_host` for "
-            "non-Gmail providers.)"
+            "sender_app_password = \"16-char-app-password\"\n```\n"
+            "Gmail: create an **App Password** at myaccount.google.com → Security → "
+            "App passwords. Per-account you can also set `smtp_host`/`smtp_port`/"
+            "`imap_host`/`smtp_ssl` for non-Gmail providers."
         )
         return
-    st.caption(f"📧 Sender: **{sender}** · SMTP {smtp_host}:{smtp_port} · IMAP {imap_host}")
+
+    st.success(f"🔗 **{len(senders)} mailbox(es)** connected — sends are round-robined "
+               f"across them, and every inbox is scanned for bounces.")
+    with st.expander("📧 Connected mailboxes"):
+        for s in senders:
+            st.caption(f"• **{s['email']}** — SMTP {s['smtp_host']}:{s['smtp_port']} · "
+                       f"IMAP {s['imap_host']}")
 
     up = st.file_uploader("Upload a CSV with an **Email** column", type=["csv"], key="bc_up")
     emails = []
@@ -780,47 +830,55 @@ def render_bounce_tab():
                         key="bc_body", height=120)
     c1, c2 = st.columns(2)
     with c1:
-        cap = st.number_input("Max to send this run (volume cap)", 1, 2000, 100, key="bc_cap")
+        cap = st.number_input("Max to send this run (volume cap)", 1, 5000, 100, key="bc_cap")
     with c2:
         delay = st.number_input("Seconds between sends", 1.0, 30.0, 3.0, key="bc_delay")
+    st.caption(f"With {len(senders)} mailbox(es), a cap of {int(cap)} ≈ "
+               f"~{int(cap) // len(senders)} sends per account.")
 
     if st.button(f"📨 Send probe emails to {min(len(emails), int(cap))} address(es)",
                  type="primary", disabled=not emails, key="bc_send"):
         prog = st.progress(0.0, text="Sending…")
         try:
-            res = bounce_check.send_probes(
-                smtp_host, smtp_port, sender, pw, emails, subject, body,
-                delay=float(delay), limit=int(cap), use_ssl=use_ssl,
+            res, login_errors = bounce_check.send_probes_multi(
+                senders, emails, subject, body,
+                delay=float(delay), limit=int(cap),
                 on_progress=lambda a, b: prog.progress(a / b, text=f"Sent {a}/{b}"),
             )
             prog.empty()
-            sent_ok = [e for e, v in res.items() if v == "sent"]
-            rejected = [e for e, v in res.items() if v == "rejected"]
+            if login_errors:
+                for em, err in login_errors.items():
+                    st.error(f"Login failed for **{em}**: {err} — that mailbox was skipped.")
+            sent_ok = [e for e, v in res.items() if v["status"] == "sent"]
+            rejected = [e for e, v in res.items() if v["status"] == "rejected"]
             st.session_state["bc_sent"] = sent_ok + rejected
             st.session_state["bc_rejected"] = rejected
-            st.success(f"Sent {len(sent_ok)} · instantly rejected {len(rejected)} "
-                       f"(those are already-confirmed bad).")
-            errs = {e: v for e, v in res.items() if v.startswith("error")}
+            if sent_ok or rejected:
+                st.success(f"Sent {len(sent_ok)} · instantly rejected {len(rejected)} "
+                           f"(those are already-confirmed bad).")
+            errs = {e: v["status"] for e, v in res.items() if v["status"].startswith("error")}
             if errs:
                 st.warning(f"{len(errs)} send error(s) — first: {list(errs.values())[0]}")
         except Exception as exc:
             prog.empty()
-            st.error(f"Send failed (check credentials / app password): {exc}")
+            st.error(f"Send failed: {exc}")
 
     sent = st.session_state.get("bc_sent", [])
     if sent:
         st.divider()
         st.markdown(f"#### Check for bounces ({len(sent)} sent)")
         st.caption("Bounces take a few minutes to a few hours to arrive. Click below "
-                   "after a wait to scan your inbox.")
+                   "after a wait to scan every connected inbox.")
         if st.button("🔍 Check bounces now", key="bc_check"):
-            with st.spinner("Reading inbox for bounce notices…"):
+            with st.spinner("Reading inbox(es) for bounce notices…"):
                 try:
-                    bounced = bounce_check.read_bounces(imap_host, sender, pw, sent)
+                    bounced, imap_errors = bounce_check.read_bounces_multi(senders, sent)
                 except Exception as exc:
-                    bounced = None
-                    st.error(f"IMAP read failed (check app password / IMAP enabled): {exc}")
+                    bounced, imap_errors = None, {}
+                    st.error(f"IMAP read failed: {exc}")
             if bounced is not None:
+                for em, err in imap_errors.items():
+                    st.warning(f"Couldn't read inbox for **{em}**: {err}")
                 rejected = set(st.session_state.get("bc_rejected", []))
                 bad = {b.lower() for b in bounced} | {r.lower() for r in rejected}
                 rows = [{"Email": e, "Result": "❌ Bounced" if e.lower() in bad
