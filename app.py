@@ -803,98 +803,143 @@ def render_bounce_tab():
         )
         return
 
-    st.success(f"🔗 **{len(senders)} mailbox(es)** connected — sends are round-robined "
-               f"across them, and every inbox is scanned for bounces.")
+    st.success(f"🔗 **{len(senders)} mailbox(es)** connected — sending is **parallel** "
+               f"and **company-grouped** (one company = one account), each account "
+               f"capped **under 500/day**.")
     with st.expander("📧 Connected mailboxes"):
         for s in senders:
             st.caption(f"• **{s['email']}** — SMTP {s['smtp_host']}:{s['smtp_port']} · "
                        f"IMAP {s['imap_host']}")
 
-    up = st.file_uploader("Upload a CSV with an **Email** column", type=["csv"], key="bc_up")
-    emails = []
+    up = st.file_uploader("Upload a CSV with an **Email** column "
+                          "(optional **Company** / **Domain** columns for grouping)",
+                          type=["csv"], key="bc_up")
     if up is not None:
         try:
             bdf = pd.read_csv(up)
-            col = next((c for c in bdf.columns if c.lower() == "email"), None)
-            if col:
-                emails = [e for e in bdf[col].astype(str).tolist() if "@" in e]
-                st.success(f"Loaded {len(emails)} email(s) from column '{col}'.")
+            ecol = next((c for c in bdf.columns if c.lower() == "email"), None)
+            ccol = next((c for c in bdf.columns if c.lower() == "company"), None)
+            dcol = next((c for c in bdf.columns if c.lower() == "domain"), None)
+            if ecol:
+                items = []
+                for _, r in bdf.iterrows():
+                    e = str(r[ecol]).strip()
+                    if "@" not in e:
+                        continue
+                    items.append({
+                        "email": e,
+                        "company": str(r[ccol]).strip() if ccol else "",
+                        "domain": str(r[dcol]).strip() if dcol else "",
+                    })
+                st.session_state["bc_items"] = items
+                grp = "Company" if ccol else ("Domain" if dcol else "email domain")
+                st.success(f"Loaded {len(items)} address(es) — grouped by **{grp}**.")
             else:
                 st.error("No 'Email' column found in the CSV.")
         except Exception as exc:
             st.error(f"Couldn't read CSV: {exc}")
 
+    items = st.session_state.get("bc_items", [])
+
     st.markdown("#### Message to send")
     subject = st.text_input("Subject", "Quick question", key="bc_subj")
     body = st.text_area("Body", "Hello,\n\nReaching out regarding a quick question.\n\nThanks",
-                        key="bc_body", height=120)
-    c1, c2 = st.columns(2)
-    with c1:
-        cap = st.number_input("Max to send this run (volume cap)", 1, 5000, 100, key="bc_cap")
-    with c2:
-        delay = st.number_input("Seconds between sends", 1.0, 30.0, 3.0, key="bc_delay")
-    st.caption(f"With {len(senders)} mailbox(es), a cap of {int(cap)} ≈ "
-               f"~{int(cap) // len(senders)} sends per account.")
+                        key="bc_body", height=110)
 
-    if st.button(f"📨 Send probe emails to {min(len(emails), int(cap))} address(es)",
-                 type="primary", disabled=not emails, key="bc_send"):
-        prog = st.progress(0.0, text="Sending…")
-        try:
-            res, login_errors = bounce_check.send_probes_multi(
-                senders, emails, subject, body,
-                delay=float(delay), limit=int(cap),
-                on_progress=lambda a, b: prog.progress(a / b, text=f"Sent {a}/{b}"),
-            )
-            prog.empty()
-            if login_errors:
-                for em, err in login_errors.items():
-                    st.error(f"Login failed for **{em}**: {err} — that mailbox was skipped.")
-            sent_ok = [e for e, v in res.items() if v["status"] == "sent"]
-            rejected = [e for e, v in res.items() if v["status"] == "rejected"]
-            st.session_state["bc_sent"] = sent_ok + rejected
-            st.session_state["bc_rejected"] = rejected
-            if sent_ok or rejected:
-                st.success(f"Sent {len(sent_ok)} · instantly rejected {len(rejected)} "
-                           f"(those are already-confirmed bad).")
-            errs = {e: v["status"] for e, v in res.items() if v["status"].startswith("error")}
-            if errs:
-                st.warning(f"{len(errs)} send error(s) — first: {list(errs.values())[0]}")
-        except Exception as exc:
-            prog.empty()
-            st.error(f"Send failed: {exc}")
+    st.markdown("#### Distribution (randomized per account, all under 500)")
+    c1, c2, c3 = st.columns(3)
+    cap_lo = c1.number_input("Min per account", 1, 499, 200, key="bc_lo")
+    cap_hi = c2.number_input("Max per account (<500)", 1, 499, 490, key="bc_hi")
+    delay = c3.number_input("Sec between sends (per acct)", 0.0, 30.0, 1.0, key="bc_delay")
+    if cap_lo > cap_hi:
+        cap_lo = cap_hi
 
+    if items:
+        assign, caps, leftover = bounce_check.plan_assignments(
+            items, len(senders), int(cap_lo), int(cap_hi), seed=42
+        )
+        n_companies = len({bounce_check._group_key(it) for it in items})
+        used = [(s["email"], len(a), caps[i])
+                for i, (s, a) in enumerate(zip(senders, assign)) if a]
+        total_planned = sum(len(a) for a in assign)
+
+        st.markdown("#### 📋 Send plan")
+        msg = (f"**{len(items)}** addresses across **{n_companies}** companies → "
+               f"**{len(used)}** account(s), **{total_planned}** will send this run.")
+        if leftover:
+            msg += (f"  ⚠️ **{len(leftover)}** didn't fit under the caps "
+                    f"(add mailboxes or raise the max).")
+        st.caption(msg)
+        st.dataframe(
+            pd.DataFrame(used, columns=["Account", "Emails this run", "Random cap"]),
+            use_container_width=True, height=min(60 + 35 * len(used), 300),
+        )
+
+        if st.button(f"🚀 Send {total_planned} emails in parallel across {len(used)} account(s)",
+                     type="primary", key="bc_send"):
+            with st.spinner(f"Sending {total_planned} emails in parallel across "
+                            f"{len(used)} account(s)…"):
+                try:
+                    res = bounce_check.send_parallel(
+                        senders, assign, subject, body, delay=float(delay)
+                    )
+                except Exception as exc:
+                    res = None
+                    st.error(f"Send failed: {exc}")
+            if res is not None:
+                sent_ok = [e for e, v in res.items() if v["status"] == "sent"]
+                rejected = [e for e, v in res.items() if v["status"] == "rejected"]
+                errs = {e: v["status"] for e, v in res.items()
+                        if str(v["status"]).startswith("error")}
+                st.session_state["bc_sent"] = sent_ok + rejected
+                st.session_state["bc_rejected"] = rejected
+                st.success(f"✅ Sent {len(sent_ok)} · instantly rejected {len(rejected)} "
+                           f"(already-bad) · errors {len(errs)}.")
+                if errs:
+                    st.warning(f"First error: {list(errs.values())[0]}")
+
+    # ---- Bounce tracking (parallel across inboxes, auto-refresh on a timer) ----
     sent = st.session_state.get("bc_sent", [])
     if sent:
         st.divider()
-        st.markdown(f"#### Check for bounces ({len(sent)} sent)")
-        st.caption("Bounces take a few minutes to a few hours to arrive. Click below "
-                   "after a wait to scan every connected inbox.")
-        if st.button("🔍 Check bounces now", key="bc_check"):
-            with st.spinner("Reading inbox(es) for bounce notices…"):
-                try:
-                    bounced, imap_errors = bounce_check.read_bounces_multi(senders, sent)
-                except Exception as exc:
-                    bounced, imap_errors = None, {}
-                    st.error(f"IMAP read failed: {exc}")
-            if bounced is not None:
-                for em, err in imap_errors.items():
-                    st.warning(f"Couldn't read inbox for **{em}**: {err}")
-                rejected = set(st.session_state.get("bc_rejected", []))
-                bad = {b.lower() for b in bounced} | {r.lower() for r in rejected}
-                rows = [{"Email": e, "Result": "❌ Bounced" if e.lower() in bad
-                         else "✅ Delivered (no bounce yet)"} for e in sent]
-                bdf = pd.DataFrame(rows)
-                n_bad = (bdf["Result"].str.startswith("❌")).sum()
-                m1, m2 = st.columns(2)
-                m1.metric("❌ Bounced (invalid)", int(n_bad))
-                m2.metric("✅ No bounce (likely valid)", len(sent) - int(n_bad))
-                st.dataframe(bdf, use_container_width=True, height=320)
-                st.download_button("📥 Download bounce results", to_csv_bytes(bdf),
-                                   "bounce_results.csv", "text/csv",
-                                   use_container_width=True, key="bc_dl")
-                st.caption("Note: 'no bounce yet' isn't a guarantee — some servers "
-                           "accept-then-drop silently (catch-all), and slow bounces "
-                           "can arrive later. Re-check after a few hours.")
+        st.markdown(f"#### 📨 Bounce tracking ({len(sent)} sent)")
+
+        def _render_bounce_results():
+            live = st.session_state.get("bc_sent", [])
+            bounced, imap_errors = bounce_check.read_bounces_parallel(senders, live)
+            for em, err in imap_errors.items():
+                st.warning(f"Couldn't read inbox for **{em}**: {err}")
+            rejected = set(st.session_state.get("bc_rejected", []))
+            bad = {b.lower() for b in bounced} | {r.lower() for r in rejected}
+            rows = [{"Email": e, "Result": "❌ Bounced" if e.lower() in bad
+                     else "✅ No bounce (likely valid)"} for e in live]
+            bdf = pd.DataFrame(rows)
+            n_bad = int((bdf["Result"].str.startswith("❌")).sum()) if not bdf.empty else 0
+            m1, m2 = st.columns(2)
+            m1.metric("❌ Bounced (invalid)", n_bad)
+            m2.metric("✅ No bounce (likely valid)", len(live) - n_bad)
+            st.caption(f"Last checked {pd.Timestamp.now().strftime('%H:%M:%S')} · "
+                       f"scanned {len(senders)} inbox(es) in parallel.")
+            st.dataframe(bdf, use_container_width=True, height=320)
+            st.download_button("📥 Download bounce results", to_csv_bytes(bdf),
+                               "bounce_results.csv", "text/csv",
+                               use_container_width=True, key="bc_dl")
+
+        ca, cb = st.columns([1, 1])
+        auto = ca.checkbox("Auto-check on a timer", value=True, key="bc_auto")
+        every = cb.selectbox("Check every", ["2 min", "5 min", "10 min"], index=1, key="bc_every")
+        secs = {"2 min": 120, "5 min": 300, "10 min": 600}[every]
+
+        if auto and hasattr(st, "fragment"):
+            st.caption("⏱️ Auto-refreshing while this browser tab stays open. Bounces "
+                       "can take minutes-to-hours to arrive, so leave it running.")
+            st.fragment(run_every=secs)(_render_bounce_results)()
+        else:
+            if not hasattr(st, "fragment"):
+                st.caption("Auto-refresh unavailable on this Streamlit version — "
+                           "use the button to re-scan.")
+            if st.button("🔍 Check bounces now", key="bc_check"):
+                _render_bounce_results()
 
 
 task1_tab, task2_tab, excel_tab, bounce_tab = st.tabs(

@@ -9,9 +9,12 @@ Secrets by the caller and passed in here - nothing is stored or hardcoded.
 
 import email as emaillib
 import imaplib
+import random
 import re
 import smtplib
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
 
@@ -149,7 +152,7 @@ def send_probes_multi(senders, targets, subject, body,
 
 
 def read_bounces_multi(senders, sent_addresses, scan_last=800):
-    """Scan every account's inbox for bounces. Returns (bounced_set, errors)."""
+    """Scan every account's inbox for bounces (sequential). Returns (bounced, errors)."""
     bounced = set()
     errors = {}
     for s in senders:
@@ -158,6 +161,132 @@ def read_bounces_multi(senders, sent_addresses, scan_last=800):
                                     s["app_password"], sent_addresses, scan_last)
         except Exception as exc:
             errors[s.get("email", "?")] = f"{type(exc).__name__}: {exc}"
+    return bounced, errors
+
+
+# ======================================================================
+# Scaled sending: company-grouped, randomized-per-account, fully parallel.
+# ======================================================================
+def _group_key(item):
+    """One key per company: prefer the Company name, else the email domain, so
+    every address of a company lands in the same bucket (one sender account)."""
+    comp = str(item.get("company", "") or "").strip().lower()
+    if comp:
+        return "c:" + comp
+    dom = str(item.get("domain", "") or "").strip().lower()
+    if not dom:
+        e = str(item.get("email", ""))
+        dom = e.split("@", 1)[1].lower() if "@" in e else ""
+    return "d:" + dom
+
+
+def plan_assignments(items, n_accounts, cap_lo=200, cap_hi=490, seed=None):
+    """Distribute `items` (dicts with email + company/domain) across `n_accounts`.
+
+    Rules:
+      * every address of one company goes to ONE account (company kept intact),
+      * each account gets a RANDOM cap in [cap_lo, cap_hi] (< 500 Gmail limit),
+      * companies are placed in randomized order, first account that still has
+        room takes the whole company.
+    Returns (assignments, caps, leftover) where assignments[i] is the email list
+    for account i, and leftover holds addresses that didn't fit under any cap.
+    """
+    rng = random.Random(seed)
+    groups = {}
+    for it in items:
+        em = str(it.get("email", "")).strip()
+        if em and "@" in em:
+            groups.setdefault(_group_key(it), []).append(em)
+    # de-dupe within each company, then randomize company order
+    glist = [list(dict.fromkeys(v)) for v in groups.values()]
+    rng.shuffle(glist)
+
+    caps = [rng.randint(cap_lo, cap_hi) for _ in range(n_accounts)]
+    assign = [[] for _ in range(n_accounts)]
+    leftover = []
+    for emails in glist:
+        idx = next((i for i in range(n_accounts)
+                    if len(assign[i]) + len(emails) <= caps[i]), None)
+        if idx is None:
+            leftover.extend(emails)
+        else:
+            assign[idx].extend(emails)
+    return assign, caps, leftover
+
+
+def _send_account_batch(sender, emails, subject, body, delay, results, lock, counter):
+    """Worker: one account sends its whole batch. Lazy-connects (no upfront lag),
+    reconnects once on a dropped/idle connection."""
+    if not emails:
+        return
+    srv = None
+    for to in emails:
+        status = None
+        for attempt in (1, 2):
+            try:
+                if srv is None:
+                    srv = _open_smtp(sender)
+                srv.sendmail(sender["email"], [to],
+                             _build_msg(sender["email"], to, subject, body).as_string())
+                status = "sent"
+                break
+            except smtplib.SMTPRecipientsRefused:
+                status = "rejected"
+                break
+            except Exception as exc:
+                srv = None                       # force reconnect on retry
+                if attempt == 2:
+                    status = f"error: {type(exc).__name__}: {exc}"
+        with lock:
+            results[to] = {"status": status, "via": sender["email"]}
+            counter[0] += 1
+        time.sleep(delay)
+    try:
+        srv.quit()
+    except Exception:
+        pass
+
+
+def send_parallel(senders, assignments, subject, body, delay=1.0, counter=None):
+    """Send every account's batch AT THE SAME TIME (one thread per account).
+
+    `assignments[i]` are the emails for `senders[i]`. `counter` is an optional
+    1-element list the caller can read from another thread for live progress.
+    Returns results {email: {'status':..., 'via':...}}.
+    """
+    results = {}
+    lock = threading.Lock()
+    if counter is None:
+        counter = [0]
+    with ThreadPoolExecutor(max_workers=max(1, len(senders))) as ex:
+        futures = [
+            ex.submit(_send_account_batch, s, emails, subject, body, delay,
+                      results, lock, counter)
+            for s, emails in zip(senders, assignments)
+        ]
+        for f in futures:
+            f.result()
+    return results
+
+
+def read_bounces_parallel(senders, sent_addresses, scan_last=500):
+    """Scan every inbox for bounces CONCURRENTLY. Returns (bounced_set, errors)."""
+    bounced = set()
+    errors = {}
+    lock = threading.Lock()
+
+    def one(s):
+        try:
+            b = read_bounces(s["imap_host"], s["email"], s["app_password"],
+                             sent_addresses, scan_last)
+            with lock:
+                bounced.update(b)
+        except Exception as exc:
+            with lock:
+                errors[s.get("email", "?")] = f"{type(exc).__name__}: {exc}"
+
+    with ThreadPoolExecutor(max_workers=min(max(1, len(senders)), 12)) as ex:
+        list(ex.map(one, senders))
     return bounced, errors
 
 
