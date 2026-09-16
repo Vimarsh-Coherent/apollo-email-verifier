@@ -214,6 +214,29 @@ def plan_assignments(items, n_accounts, cap_lo=200, cap_hi=490, seed=None):
     return assign, caps, leftover
 
 
+def accounts_needed(items, cap):
+    """Minimum number of accounts needed to send every address, keeping each
+    company on one account and each account under `cap`. Uses first-fit-
+    decreasing bin-packing. Returns (num_accounts, total_emails)."""
+    groups = {}
+    for it in items:
+        em = str(it.get("email", "")).strip()
+        if em and "@" in em:
+            groups.setdefault(_group_key(it), set()).add(em)
+    sizes = sorted((len(v) for v in groups.values()), reverse=True)
+    bins = []
+    for sz in sizes:
+        placed = False
+        for i in range(len(bins)):
+            if bins[i] + sz <= cap:
+                bins[i] += sz
+                placed = True
+                break
+        if not placed:
+            bins.append(sz)          # a company bigger than cap gets its own bin
+    return len(bins), sum(sizes)
+
+
 def _send_account_batch(sender, emails, subject, body, delay, results, lock, counter):
     """Worker: one account sends its whole batch. Lazy-connects (no upfront lag),
     reconnects once on a dropped/idle connection."""

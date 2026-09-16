@@ -877,11 +877,28 @@ def render_bounce_tab():
         total_planned = sum(len(a) for a in assign)
 
         st.markdown("#### 📋 Send plan")
+        need, total_addr = bounce_check.accounts_needed(items, int(cap_hi))
+        na, nb = st.columns(2)
+        na.metric("Accounts needed (all emails)", need,
+                  help=f"To send all {total_addr} emails at ≤{int(cap_hi)}/account, "
+                       f"keeping each company on one account.")
+        nb.metric("Accounts selected", len(use_senders),
+                  delta=(len(use_senders) - need),
+                  delta_color=("normal" if len(use_senders) >= need else "inverse"))
+        if len(use_senders) < need:
+            st.warning(f"⚠️ You need **{need}** accounts to send all **{total_addr}** "
+                       f"emails, but only **{len(use_senders)}** are selected. "
+                       f"**Add {need - len(use_senders)} more mailbox(es)** (or raise the "
+                       f"per-account max) to send everything in one run — otherwise "
+                       f"{total_addr - total_planned} will be left for a later run.")
+        else:
+            st.success(f"✅ Enough accounts: {len(use_senders)} selected covers all "
+                       f"{total_addr} emails.")
+
         msg = (f"**{len(items)}** addresses across **{n_companies}** companies → "
-               f"**{len(used)}** account(s), **{total_planned}** will send this run.")
+               f"**{len(used)}** account(s) used this run, **{total_planned}** will send.")
         if leftover:
-            msg += (f"  ⚠️ **{len(leftover)}** didn't fit under the caps "
-                    f"(add mailboxes or raise the max).")
+            msg += (f"  ⚠️ **{len(leftover)}** didn't fit (need more accounts / higher max).")
         st.caption(msg)
         st.dataframe(
             pd.DataFrame(used, columns=["Account", "Emails this run", "Random cap"]),
