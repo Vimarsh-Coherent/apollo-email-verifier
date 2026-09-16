@@ -848,6 +848,17 @@ def render_bounce_tab():
     body = st.text_area("Body", "Hello,\n\nReaching out regarding a quick question.\n\nThanks",
                         key="bc_body", height=110)
 
+    st.markdown("#### Accounts to send from")
+    all_emails = [s["email"] for s in senders]
+    chosen = st.multiselect(
+        "Pick which mailboxes send this batch (deselect ones you've already used "
+        "for a previous batch)",
+        options=all_emails, default=all_emails, key="bc_use_accts",
+    )
+    use_senders = [s for s in senders if s["email"] in chosen]
+    if not use_senders:
+        st.warning("Select at least one account to send from.")
+
     st.markdown("#### Distribution (randomized per account, all under 500)")
     c1, c2, c3 = st.columns(3)
     cap_lo = c1.number_input("Min per account", 1, 499, 200, key="bc_lo")
@@ -856,13 +867,13 @@ def render_bounce_tab():
     if cap_lo > cap_hi:
         cap_lo = cap_hi
 
-    if items:
+    if items and use_senders:
         assign, caps, leftover = bounce_check.plan_assignments(
-            items, len(senders), int(cap_lo), int(cap_hi), seed=42
+            items, len(use_senders), int(cap_lo), int(cap_hi), seed=42
         )
         n_companies = len({bounce_check._group_key(it) for it in items})
         used = [(s["email"], len(a), caps[i])
-                for i, (s, a) in enumerate(zip(senders, assign)) if a]
+                for i, (s, a) in enumerate(zip(use_senders, assign)) if a]
         total_planned = sum(len(a) for a in assign)
 
         st.markdown("#### 📋 Send plan")
@@ -883,7 +894,7 @@ def render_bounce_tab():
                             f"{len(used)} account(s)…"):
                 try:
                     res = bounce_check.send_parallel(
-                        senders, assign, subject, body, delay=float(delay)
+                        use_senders, assign, subject, body, delay=float(delay)
                     )
                 except Exception as exc:
                     res = None
@@ -895,10 +906,27 @@ def render_bounce_tab():
                         if str(v["status"]).startswith("error")}
                 st.session_state["bc_sent"] = sent_ok + rejected
                 st.session_state["bc_rejected"] = rejected
+                # Per-email → sender-account log (which id sent which email).
+                log = pd.DataFrame(
+                    [{"Email": e, "Sent from": v["via"], "Status": v["status"]}
+                     for e, v in res.items()]
+                ).sort_values(["Sent from", "Email"])
+                st.session_state["bc_sendlog"] = log
                 st.success(f"✅ Sent {len(sent_ok)} · instantly rejected {len(rejected)} "
                            f"(already-bad) · errors {len(errs)}.")
                 if errs:
                     st.warning(f"First error: {list(errs.values())[0]}")
+
+    # Send log (which email went from which account) — persists for download.
+    log = st.session_state.get("bc_sendlog")
+    if log is not None and not log.empty:
+        st.markdown("#### 🧾 Send log (which account sent which email)")
+        by_acct = log.groupby("Sent from").size().to_dict()
+        st.caption("Sent per account: " + " · ".join(f"{k}: {v}" for k, v in by_acct.items()))
+        st.dataframe(log, use_container_width=True, height=260)
+        st.download_button("📥 Download send log", to_csv_bytes(log),
+                           "bounce_send_log.csv", "text/csv",
+                           use_container_width=True, key="bc_dl_log")
 
     # ---- Bounce tracking (parallel across inboxes, auto-refresh on a timer) ----
     # Check the session's sent list if present; otherwise fall back to the
