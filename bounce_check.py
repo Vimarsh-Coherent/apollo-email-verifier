@@ -312,9 +312,26 @@ def read_bounces(imap_host, sender, app_password, sent_addresses, scan_last=800)
     try:
         box.login(sender, app_password)
         box.select("INBOX")
-        typ, data = box.search(None, "ALL")
-        ids = data[0].split()
-        for num in ids[-scan_last:]:
+        # Fast path: ask the server for ONLY bounce-type messages (by sender /
+        # subject) instead of downloading every message. Falls back to ALL only
+        # if every targeted search fails.
+        ids = set()
+        for key, val in (("FROM", "mailer-daemon"), ("FROM", "postmaster"),
+                         ("FROM", "mail-daemon"), ("SUBJECT", "undeliverable"),
+                         ("SUBJECT", "undelivered"), ("SUBJECT", "failure"),
+                         ("SUBJECT", "returned"), ("SUBJECT", "delivery")):
+            try:
+                typ, data = box.search(None, key, val)
+                if typ == "OK" and data and data[0]:
+                    ids.update(data[0].split())
+            except Exception:
+                pass
+        if ids:
+            ids = sorted(ids, key=lambda x: int(x))[-scan_last:]
+        else:
+            typ, data = box.search(None, "ALL")
+            ids = data[0].split()[-scan_last:]
+        for num in ids:
             typ, md = box.fetch(num, "(RFC822)")
             if not md or not md[0]:
                 continue

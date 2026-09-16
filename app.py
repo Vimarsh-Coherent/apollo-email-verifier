@@ -934,21 +934,23 @@ def render_bounce_tab():
                                "bounce_results.csv", "text/csv",
                                use_container_width=True, key="bc_dl")
 
+        # Always-available manual scan button.
+        check_now = st.button("🔍 Check bounces now", type="primary", key="bc_check")
+
         ca, cb = st.columns([1, 1])
-        auto = ca.checkbox("Auto-check on a timer", value=True, key="bc_auto")
+        auto = ca.checkbox("Also auto-check on a timer", value=False, key="bc_auto")
         every = cb.selectbox("Check every", ["2 min", "5 min", "10 min"], index=1, key="bc_every")
         secs = {"2 min": 120, "5 min": 300, "10 min": 600}[every]
 
         if auto and hasattr(st, "fragment"):
-            st.caption("⏱️ Auto-refreshing while this browser tab stays open. Bounces "
-                       "can take minutes-to-hours to arrive, so leave it running.")
+            st.caption("⏱️ Auto-refreshing while this browser tab stays open (also "
+                       "scans immediately). Bounces can take minutes-to-hours to arrive.")
             st.fragment(run_every=secs)(_render_bounce_results)()
-        else:
-            if not hasattr(st, "fragment"):
-                st.caption("Auto-refresh unavailable on this Streamlit version — "
-                           "use the button to re-scan.")
-            if st.button("🔍 Check bounces now", key="bc_check"):
+        elif check_now:
+            with st.spinner(f"Scanning {len(senders)} inbox(es) for bounces…"):
                 _render_bounce_results()
+        else:
+            st.caption("Click **🔍 Check bounces now** to scan, or turn on auto-check.")
 
 
 task1_tab, task2_tab, excel_tab, bounce_tab = st.tabs(
