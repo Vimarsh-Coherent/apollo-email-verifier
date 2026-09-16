@@ -976,7 +976,16 @@ def render_bounce_tab():
             st.caption(f"Last checked {pd.Timestamp.now().strftime('%H:%M:%S')} · "
                        f"scanned {len(senders)} inbox(es) in parallel.")
             st.dataframe(bdf, use_container_width=True, height=320)
-            st.download_button("📥 Download bounce results", to_csv_bytes(bdf),
+            no_bounce = bdf[~bdf["Result"].str.startswith("❌")][["Email"]]
+            bounced_only = bdf[bdf["Result"].str.startswith("❌")][["Email"]]
+            d1, d2, d3 = st.columns(3)
+            d1.download_button(f"✅ No-bounce list ({len(no_bounce)})",
+                               to_csv_bytes(no_bounce), "no_bounce_list.csv", "text/csv",
+                               use_container_width=True, key="bc_dl_nob")
+            d2.download_button(f"❌ Bounced list ({len(bounced_only)})",
+                               to_csv_bytes(bounced_only), "bounced_list.csv", "text/csv",
+                               use_container_width=True, key="bc_dl_bad")
+            d3.download_button("📥 Full results", to_csv_bytes(bdf),
                                "bounce_results.csv", "text/csv",
                                use_container_width=True, key="bc_dl")
 
