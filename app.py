@@ -901,13 +901,20 @@ def render_bounce_tab():
                     st.warning(f"First error: {list(errs.values())[0]}")
 
     # ---- Bounce tracking (parallel across inboxes, auto-refresh on a timer) ----
+    # Check the session's sent list if present; otherwise fall back to the
+    # uploaded list, so bounce-checking still works after an app redeploy wiped
+    # the session (re-upload the same file and scan — no re-send needed).
     sent = st.session_state.get("bc_sent", [])
-    if sent:
+    check_list = sent if sent else [it["email"] for it in items]
+    if check_list:
         st.divider()
-        st.markdown(f"#### 📨 Bounce tracking ({len(sent)} sent)")
+        label = (f"{len(sent)} sent this session" if sent
+                 else f"{len(check_list)} from uploaded list (checking without re-sending)")
+        st.markdown(f"#### 📨 Bounce tracking ({label})")
 
         def _render_bounce_results():
-            live = st.session_state.get("bc_sent", [])
+            live = (st.session_state.get("bc_sent", [])
+                    or [it["email"] for it in st.session_state.get("bc_items", [])])
             bounced, imap_errors = bounce_check.read_bounces_parallel(senders, live)
             for em, err in imap_errors.items():
                 st.warning(f"Couldn't read inbox for **{em}**: {err}")
