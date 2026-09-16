@@ -291,8 +291,10 @@ def read_bounces_parallel(senders, sent_addresses, scan_last=500):
 
 
 def _is_bounce(msg):
-    frm = (msg.get("From") or "").lower()
-    subj = (msg.get("Subject") or "").lower()
+    # get() can return an email.header.Header (encoded headers), not a str, so
+    # coerce before .lower() — otherwise "'Header' object has no attribute 'lower'".
+    frm = str(msg.get("From") or "").lower()
+    subj = str(msg.get("Subject") or "").lower()
     if any(b in frm for b in _BOUNCE_FROM):
         return True
     if any(b in subj for b in _BOUNCE_SUBJ):
