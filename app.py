@@ -1,5 +1,6 @@
 import streamlit as st
 import json
+import re
 import urllib.request
 import urllib.error
 import pandas as pd
@@ -822,6 +823,8 @@ def render_bounce_tab():
             ecol = next((c for c in bdf.columns if c.lower() == "email"), None)
             ccol = next((c for c in bdf.columns if c.lower() == "company"), None)
             dcol = next((c for c in bdf.columns if c.lower() == "domain"), None)
+            ncol = next((c for c in bdf.columns if c.lower() == "name"), None)
+            gcol = next((c for c in bdf.columns if c.lower() == "designation"), None)
             if ecol:
                 items = []
                 for _, r in bdf.iterrows():
@@ -832,6 +835,8 @@ def render_bounce_tab():
                         "email": e,
                         "company": str(r[ccol]).strip() if ccol else "",
                         "domain": str(r[dcol]).strip() if dcol else "",
+                        "name": str(r[ncol]).strip() if ncol else "",
+                        "designation": str(r[gcol]).strip() if gcol else "",
                     })
                 st.session_state["bc_items"] = items
                 grp = "Company" if ccol else ("Domain" if dcol else "email domain")
@@ -976,14 +981,34 @@ def render_bounce_tab():
             st.caption(f"Last checked {pd.Timestamp.now().strftime('%H:%M:%S')} · "
                        f"scanned {len(senders)} inbox(es) in parallel.")
             st.dataframe(bdf, use_container_width=True, height=320)
-            no_bounce = bdf[~bdf["Result"].str.startswith("❌")][["Email"]]
-            bounced_only = bdf[bdf["Result"].str.startswith("❌")][["Email"]]
+
+            # Enrich with Company/Name/Designation from the uploaded list, so the
+            # no-bounce export is a client-ready contact sheet, one row per person.
+            meta = {it["email"].lower(): it for it in st.session_state.get("bc_items", [])}
+
+            def _enrich(email_series):
+                rows, seen = [], set()
+                for e in email_series:
+                    it = meta.get(str(e).lower(), {})
+                    name = it.get("name", "")
+                    key = (re.sub(r"[^a-z0-9]", "", name.lower()),
+                           re.sub(r"[^a-z0-9]", "", it.get("company", "").lower()))
+                    if name and key in seen:      # one email per person
+                        continue
+                    if name:
+                        seen.add(key)
+                    rows.append({"Company": it.get("company", ""), "Name": name,
+                                 "Designation": it.get("designation", ""), "Email": e})
+                return pd.DataFrame(rows)
+
+            no_bounce = _enrich(bdf[~bdf["Result"].str.startswith("❌")]["Email"])
+            bounced_only = _enrich(bdf[bdf["Result"].str.startswith("❌")]["Email"])
             d1, d2, d3 = st.columns(3)
             d1.download_button(f"✅ No-bounce list ({len(no_bounce)})",
-                               to_csv_bytes(no_bounce), "no_bounce_list.csv", "text/csv",
+                               to_csv_bytes(no_bounce), "no_bounce_contacts.csv", "text/csv",
                                use_container_width=True, key="bc_dl_nob")
             d2.download_button(f"❌ Bounced list ({len(bounced_only)})",
-                               to_csv_bytes(bounced_only), "bounced_list.csv", "text/csv",
+                               to_csv_bytes(bounced_only), "bounced_contacts.csv", "text/csv",
                                use_container_width=True, key="bc_dl_bad")
             d3.download_button("📥 Full results", to_csv_bytes(bdf),
                                "bounce_results.csv", "text/csv",
