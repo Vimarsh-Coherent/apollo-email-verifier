@@ -331,7 +331,9 @@ def read_bounces(imap_host, sender, app_password, sent_addresses, scan_last=800)
     that bounced. Matches by finding the recipient address inside the NDR."""
     sent = {a.strip().lower() for a in sent_addresses if a}
     bounced = set()
-    box = imaplib.IMAP4_SSL(imap_host)
+    # timeout so a slow/unresponsive inbox fails fast instead of hanging the
+    # whole parallel scan forever (the scan waits for every inbox to finish).
+    box = imaplib.IMAP4_SSL(imap_host, timeout=30)
     try:
         box.login(sender, app_password)
         box.select("INBOX")
