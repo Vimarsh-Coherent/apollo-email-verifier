@@ -382,3 +382,5 @@ def read_bounces(imap_host, sender, app_password, sent_addresses, scan_last=800)
         except Exception:
             pass
     return bounced
+
+# redeploy: load IMAP-timeout fix (force full app restart)
