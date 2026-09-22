@@ -292,6 +292,67 @@ def send_parallel(senders, assignments, subject, body, delay=1.0, counter=None):
     return results
 
 
+def sent_today(imap_host, sender, app_password):
+    """Count messages in the account's Sent folder since midnight today — i.e.
+    how much of its daily send quota is already used. Reads ground truth from
+    the mailbox, so no state needs to be stored. Returns an int (or raises)."""
+    import datetime
+    box = imaplib.IMAP4_SSL(imap_host, timeout=30)
+    try:
+        box.login(sender, app_password)
+        folder = None
+        for cand in ('"[Gmail]/Sent Mail"', "Sent", '"Sent Items"', '"Sent Mail"'):
+            typ, _ = box.select(cand, readonly=True)
+            if typ == "OK":
+                folder = cand
+                break
+        if not folder:
+            raise RuntimeError("no Sent folder found")
+        today = datetime.date.today().strftime("%d-%b-%Y")
+        typ, data = box.search(None, f"(SINCE {today})")
+        if typ != "OK" or not data or not data[0]:
+            return 0
+        return len(data[0].split())
+    finally:
+        try:
+            box.logout()
+        except Exception:
+            pass
+
+
+def account_usage(senders, daily_limit=200):
+    """For every account, read how many it has sent today (from its Sent folder)
+    and classify availability. Returns a list of dicts sorted by remaining desc:
+    {email, sent, remaining, status, error}. Runs inboxes in parallel."""
+    out = {}
+    lock = threading.Lock()
+
+    def one(s):
+        rec = {"email": s["email"], "sent": None, "remaining": None,
+               "status": "unknown", "error": ""}
+        try:
+            c = sent_today(s["imap_host"], s["email"], s["app_password"])
+            rec["sent"] = c
+            rec["remaining"] = max(0, daily_limit - c)
+            if c >= daily_limit:
+                rec["status"] = "exhausted"
+            elif c >= 0.8 * daily_limit:
+                rec["status"] = "near limit"
+            else:
+                rec["status"] = "available"
+        except Exception as exc:
+            rec["error"] = f"{type(exc).__name__}: {exc}"
+            rec["status"] = "error"
+        with lock:
+            out[s["email"]] = rec
+
+    with ThreadPoolExecutor(max_workers=min(max(1, len(senders)), 12)) as ex:
+        list(ex.map(one, senders))
+    order = {"available": 0, "near limit": 1, "exhausted": 2, "error": 3}
+    return sorted(out.values(),
+                  key=lambda r: (order.get(r["status"], 9), -(r["remaining"] or 0)))
+
+
 def read_bounces_parallel(senders, sent_addresses, scan_last=500):
     """Scan every inbox for bounces CONCURRENTLY. Returns (bounced_set, errors)."""
     bounced = set()

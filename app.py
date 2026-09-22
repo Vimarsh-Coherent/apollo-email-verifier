@@ -853,12 +853,45 @@ def render_bounce_tab():
     body = st.text_area("Body", "Hello,\n\nReaching out regarding a quick question.\n\nThanks",
                         key="bc_body", height=110)
 
-    st.markdown("#### Accounts to send from")
+    st.markdown("#### 📊 Account usage today (which mailboxes still have quota)")
+    ucol1, ucol2 = st.columns([1, 2])
+    daily_limit = ucol1.number_input("Assumed daily limit / account", 10, 500, 200,
+                                     key="bc_daily_limit",
+                                     help="Fresh Gmail accounts cap ~200–260/day. "
+                                          "Accounts at/over this are marked exhausted.")
     all_emails = [s["email"] for s in senders]
+    if ucol2.button("🔄 Check usage now (reads each Sent folder)", key="bc_usage_btn"):
+        with st.spinner("Reading Sent folders…"):
+            usage_res = bounce_check.account_usage(senders, int(daily_limit))
+        st.session_state["bc_usage"] = usage_res
+        # auto-select only the accounts that still have quota
+        st.session_state["bc_use_accts"] = [u["email"] for u in usage_res
+                                            if u["status"] == "available"] or all_emails
+    usage = st.session_state.get("bc_usage")
+    available_emails = None
+    if usage:
+        icon = {"available": "✅", "near limit": "⚠️", "exhausted": "❌", "error": "🚫"}
+        udf = pd.DataFrame([{
+            "Account": u["email"],
+            "Sent today": u["sent"] if u["sent"] is not None else "—",
+            "Remaining": u["remaining"] if u["remaining"] is not None else "—",
+            "Status": f'{icon.get(u["status"],"")} {u["status"]}'
+                      + (f' ({u["error"]})' if u["error"] else ""),
+        } for u in usage])
+        st.dataframe(udf, use_container_width=True, height=min(60 + 32 * len(usage), 320))
+        available_emails = [u["email"] for u in usage if u["status"] == "available"]
+        st.caption(f"✅ {len(available_emails)} available · "
+                   f"⚠️ {sum(1 for u in usage if u['status']=='near limit')} near limit · "
+                   f"❌ {sum(1 for u in usage if u['status']=='exhausted')} exhausted · "
+                   f"🚫 {sum(1 for u in usage if u['status']=='error')} error")
+
+    st.markdown("#### Accounts to send from")
+    if "bc_use_accts" not in st.session_state:
+        st.session_state["bc_use_accts"] = all_emails
     chosen = st.multiselect(
-        "Pick which mailboxes send this batch (deselect ones you've already used "
-        "for a previous batch)",
-        options=all_emails, default=all_emails, key="bc_use_accts",
+        "Pick which mailboxes send this batch (run the usage check above to auto-"
+        "select only the ones with remaining quota)",
+        options=all_emails, key="bc_use_accts",
     )
     use_senders = [s for s in senders if s["email"] in chosen]
     if not use_senders:
