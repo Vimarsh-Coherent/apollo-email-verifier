@@ -861,12 +861,16 @@ def render_bounce_tab():
                                           "Accounts at/over this are marked exhausted.")
     all_emails = [s["email"] for s in senders]
     if ucol2.button("🔄 Check usage now (reads each Sent folder)", key="bc_usage_btn"):
-        with st.spinner("Reading Sent folders…"):
-            usage_res = bounce_check.account_usage(senders, int(daily_limit))
-        st.session_state["bc_usage"] = usage_res
-        # auto-select only the accounts that still have quota
-        st.session_state["bc_use_accts"] = [u["email"] for u in usage_res
-                                            if u["status"] == "available"] or all_emails
+        if not hasattr(bounce_check, "account_usage"):
+            st.error("App is still finishing its redeploy — **reboot the app** "
+                     "(Manage app → Reboot), then try again.")
+        else:
+            with st.spinner("Reading Sent folders…"):
+                usage_res = bounce_check.account_usage(senders, int(daily_limit))
+            st.session_state["bc_usage"] = usage_res
+            # auto-select only the accounts that still have quota
+            st.session_state["bc_use_accts"] = [u["email"] for u in usage_res
+                                                if u["status"] == "available"] or all_emails
     usage = st.session_state.get("bc_usage")
     available_emails = None
     if usage:
