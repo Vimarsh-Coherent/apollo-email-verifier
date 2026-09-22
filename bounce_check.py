@@ -356,26 +356,39 @@ def read_bounces(imap_host, sender, app_password, sent_addresses, scan_last=800)
         else:
             typ, data = box.search(None, "ALL")
             ids = data[0].split()[-scan_last:]
-        for num in ids:
-            typ, md = box.fetch(num, "(RFC822)")
-            if not md or not md[0]:
+
+        # Batch-fetch (one IMAP command per chunk) — far faster than one-by-one
+        # when an inbox holds hundreds/thousands of bounce notices.
+        id_strs = [i.decode() if isinstance(i, bytes) else str(i) for i in ids]
+        for k in range(0, len(id_strs), 200):
+            chunk = ",".join(id_strs[k:k + 200])
+            try:
+                typ, data = box.fetch(chunk, "(RFC822)")
+            except Exception:
                 continue
-            msg = emaillib.message_from_bytes(md[0][1])
-            if not _is_bounce(msg):
+            if typ != "OK" or not data:
                 continue
-            text = ""
-            for part in msg.walk():
-                ct = part.get_content_type()
-                if ct in ("text/plain", "message/delivery-status",
-                          "text/rfc822-headers", "message/rfc822"):
-                    try:
-                        text += part.get_payload(decode=True).decode("utf-8", "replace")
-                    except Exception:
-                        pass
-            for addr in EMAIL_RE.findall(text):
-                a = addr.lower()
-                if a in sent:
-                    bounced.add(a)
+            for part in data:
+                if not (isinstance(part, tuple) and len(part) >= 2 and part[1]):
+                    continue
+                try:
+                    msg = emaillib.message_from_bytes(part[1])
+                except Exception:
+                    continue
+                if not _is_bounce(msg):
+                    continue
+                text = ""
+                for p in msg.walk():
+                    if p.get_content_type() in ("text/plain", "message/delivery-status",
+                                                "text/rfc822-headers", "message/rfc822"):
+                        try:
+                            text += p.get_payload(decode=True).decode("utf-8", "replace")
+                        except Exception:
+                            pass
+                for addr in EMAIL_RE.findall(text):
+                    a = addr.lower()
+                    if a in sent:
+                        bounced.add(a)
     finally:
         try:
             box.logout()
