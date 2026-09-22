@@ -963,23 +963,51 @@ def render_bounce_tab():
                  else f"{len(check_list)} from uploaded list (checking without re-sending)")
         st.markdown(f"#### 📨 Bounce tracking ({label})")
 
+        def _hint(err):
+            e = err.lower()
+            if "invalid credentials" in e or "authenticationfailed" in e or "auth" in e:
+                return " → wrong app password, or IMAP not enabled on this account."
+            if "timed out" in e or "timeout" in e:
+                return " → inbox slow/unreachable; it was skipped after 30s."
+            if "name or service" in e or "getaddrinfo" in e or "resolve" in e:
+                return " → IMAP host wrong/unreachable for this account."
+            return ""
+
         def _render_bounce_results():
             live = (st.session_state.get("bc_sent", [])
                     or [it["email"] for it in st.session_state.get("bc_items", [])])
-            bounced, imap_errors = bounce_check.read_bounces_parallel(senders, live)
-            for em, err in imap_errors.items():
-                st.warning(f"Couldn't read inbox for **{em}**: {err}")
+            with st.spinner(f"Scanning {len(senders)} inbox(es)…"):
+                try:
+                    bounced, imap_errors = bounce_check.read_bounces_parallel(senders, live)
+                except Exception as exc:
+                    st.error(f"❌ Bounce scan failed entirely: {type(exc).__name__}: {exc}")
+                    return
+
+            n_ok = len(senders) - len(imap_errors)
+            # Surface exactly what failed, with an actionable hint per inbox.
+            if imap_errors:
+                st.warning(f"⚠️ Could not read {len(imap_errors)} of {len(senders)} "
+                           f"inbox(es) — bounces landing in those are NOT counted:")
+                for em, err in imap_errors.items():
+                    st.write(f"• **{em}**: {err}{_hint(err)}")
+            if n_ok == 0:
+                st.error("❌ **Could not read ANY inbox** — the result below is not "
+                         "reliable. Fix the account errors above (enable IMAP / correct "
+                         "the app passwords), then re-check. Do NOT treat these as valid.")
+
             rejected = set(st.session_state.get("bc_rejected", []))
             bad = {b.lower() for b in bounced} | {r.lower() for r in rejected}
             rows = [{"Email": e, "Result": "❌ Bounced" if e.lower() in bad
                      else "✅ No bounce (likely valid)"} for e in live]
             bdf = pd.DataFrame(rows)
             n_bad = int((bdf["Result"].str.startswith("❌")).sum()) if not bdf.empty else 0
-            m1, m2 = st.columns(2)
+            m1, m2, m3 = st.columns(3)
             m1.metric("❌ Bounced (invalid)", n_bad)
             m2.metric("✅ No bounce (likely valid)", len(live) - n_bad)
+            m3.metric("📥 Inboxes read", f"{n_ok}/{len(senders)}")
             st.caption(f"Last checked {pd.Timestamp.now().strftime('%H:%M:%S')} · "
-                       f"scanned {len(senders)} inbox(es) in parallel.")
+                       f"scanned {n_ok} of {len(senders)} inbox(es) OK"
+                       + (f" · {len(imap_errors)} failed" if imap_errors else ""))
             st.dataframe(bdf, use_container_width=True, height=320)
 
             # Enrich with Company/Name/Designation from the uploaded list, so the
